@@ -28,9 +28,13 @@ Analyzes your code changes, generates a test plan for your approval, then execut
 ### Quick Install
 
 ```bash
-# From your skills directory
-git clone <repo-url> autonomous-tests
-bash autonomous-tests/scripts/setup-hook.sh
+npx skills add louiscavalcante/skills --skill autonomous-tests
+```
+
+Then run the setup script to configure required settings:
+
+```bash
+bash ~/.claude/skills/louiscavalcante-skills/autonomous-tests/scripts/setup-hook.sh
 ```
 
 The setup script configures two things in `~/.claude/settings.json`:
@@ -39,7 +43,9 @@ The setup script configures two things in `~/.claude/settings.json`:
 
 ### Manual Install
 
-1. Copy or clone this skill into your Claude Code skills directory
+If you prefer not to use [skills.sh](https://skills.sh/):
+
+1. Clone the repo and copy the `autonomous-tests/` directory into your Claude Code skills directory
 2. Enable Agent Teams — add to `~/.claude/settings.json`:
    ```json
    {
