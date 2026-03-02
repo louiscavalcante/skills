@@ -189,9 +189,9 @@ Use `TeamCreate` to create a test team. Spawn `general-purpose` Agents as teamma
 
 **Cascading context — CRITICAL**: Every agent MUST receive the full **Feature Context Document** from Phase 3 in its task description. This includes: all features touched, all endpoints, all DB collections affected, all external services involved, all identified edge cases, prior test history, and available capabilities. Agents need this complete picture to understand cross-feature side-effects (e.g., testing endpoint A may break endpoint B's state).
 
-**Capability-aware execution**: Agents should leverage detected capabilities from config when relevant to their test suite:
-- Use `agent-browser` if `frontendTesting.agentBrowser` is true and the suite involves UI testing or browser-based verification
-- Use playwright if `frontendTesting.playwright` is true for frontend component or integration tests
+**Capability-aware execution**: Agents should leverage detected capabilities from config when relevant to their test suite. **Priority for web/frontend testing: agent-browser > Playwright** — always prefer `agent-browser` when available; only fall back to Playwright if agent-browser is unavailable or unsuitable for the specific test:
+- Use `agent-browser` **first** if `frontendTesting.agentBrowser` is true and the suite involves UI testing, browser-based verification, or any web interaction
+- Use Playwright **only as fallback** if `frontendTesting.playwright` is true and agent-browser is not available
 - Use `mcp-add` to activate Docker MCPs from `dockerMcps` that are marked `safe: true` and relevant to the test needs (e.g., a Stripe sandbox MCP for payment tests)
 - Use Stripe CLI if `stripeCli.available` is true and `stripeCli.blocked` is false for webhook forwarding, payment intent testing, or event simulation
 - **NEVER** activate MCPs where `safe: false` — these may be production or unknown-mode services
