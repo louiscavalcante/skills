@@ -1,0 +1,68 @@
+{
+  "$schema": "autonomous-tests-config-v3",
+  "version": 3,
+  "initialized": "ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ)",
+  "lastRun": "ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ)",
+  "project": {
+    "root": "/absolute/path",
+    "name": "project-name",
+    "topology": "single | monorepo | multi-repo",
+    "services": [
+      {
+        "name": "service-name",
+        "type": "docker-compose | process | systemd",
+        "path": "./relative/path",
+        "startCommand": "docker compose up -d",
+        "healthCheck": "curl -sf http://localhost:8000/_health/live",
+        "logCommand": "docker logs -f container-name",
+        "container": "container-name | null"
+      }
+    ]
+  },
+  "relatedProjects": [
+    {
+      "name": "project-name",
+      "path": "/absolute/path/to/sibling",
+      "relationship": "webapp | mobile | api | worker | shared-lib | docs",
+      "startCommand": "npm run dev | null",
+      "healthCheck": "curl -sf http://localhost:3000 | null",
+      "logCommand": "null",
+      "testCommand": "npm test | null",
+      "gitTracked": true
+    }
+  ],
+  "database": {
+    "type": "mongodb | postgres | mysql | sqlite | none",
+    "connectionCommand": "docker compose exec mongodb mongosh dbname",
+    "testDbName": "test-db-name",
+    "container": "container-name | null"
+  },
+  "externalServices": [
+    {
+      "name": "service-name",
+      "type": "payment | storage | email | queue | cache | api",
+      "sandboxCheck": "command to verify sandbox mode | null",
+      "webhookListener": "stripe listen --forward-to localhost:8000/webhooks/stripe | null",
+      "productionIndicators": ["sk_live_", "LIVE_SECRET"]
+    }
+  ],
+  "testing": {
+    "unitTestCommand": "docker compose exec backend python -m pytest -x -q",
+    "testDataPrefix": "test_e2e_",
+    "contextFiles": ["CLAUDE.md", "docs/architecture.md"]
+  },
+  "documentation": {
+    "testResults": "docs/_autonomous/test-results",
+    "pendingGuidedTests": "docs/_autonomous/pending-guided-tests",
+    "pendingFixes": "docs/_autonomous/pending-fixes",
+    "pendingAutonomousTests": "docs/_autonomous/pending-autonomous-tests"
+  },
+  "userContext": {
+    "flakyAreas": ["description | null"],
+    "testCredentials": {
+      "role-name": "MUST be an env var name like $TEST_USER_PASSWORD — raw secret values are forbidden and will be redacted"
+    },
+    "testingPriorities": ["description | null"],
+    "notes": "free-form user notes | null"
+  }
+}
