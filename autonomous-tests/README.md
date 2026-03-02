@@ -4,9 +4,23 @@ Project-agnostic autonomous E2E test runner for Claude Code.
 
 Analyzes your code changes (and optional doc file references), auto-detects available testing tools, learns from previous test runs, generates a test plan for your approval, then executes end-to-end tests in parallel using Agent Teams — all against your local stack. Produces structured markdown reports and cleans up after itself.
 
+## Table of Contents
+
+- [Token Usage](#token-usage)
+- [What It Does](#what-it-does)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [Output](#output)
+- [How It Works](#how-it-works)
+- [Troubleshooting](#troubleshooting)
+- [Project Structure](#project-structure)
+
 ## Token Usage
 
-This skill is **token-intensive by design**. It uses **Claude Opus 4.6** — the most advanced model available — for both the main orchestrator and every spawned agent teammate. Opus has adaptive reasoning/thinking built-in that scales with problem complexity, which means test agents think as deeply as needed to catch subtle bugs, race conditions, and edge cases. The tradeoff is higher token consumption per run compared to skills that use lighter models. Each test suite spawns a dedicated Opus agent, so runs with many suites will consume tokens proportionally.
+> **Note:** This skill is **token-intensive by design**. It uses **Claude Opus 4.6** — the most advanced model available — for both the main orchestrator and every spawned agent teammate. Opus has adaptive reasoning/thinking built-in that scales with problem complexity, which means test agents think as deeply as needed to catch subtle bugs, race conditions, and edge cases. The tradeoff is higher token consumption per run compared to skills that use lighter models. Each test suite spawns a dedicated Opus agent, so runs with many suites will consume tokens proportionally.
 
 ## What It Does
 
@@ -75,19 +89,33 @@ If you prefer not to use [skills.sh](https://skills.sh/):
    ```
    The skill already includes this as a skill-scoped hook, so the global version is optional.
 
+### Verify Installation
+
+Run `/autonomous-tests` in any project with code changes. The skill will walk you through first-run configuration.
+
 ## Quick Start
 
-1. **Install the skill** and run the setup script (see above)
-2. **Navigate to your project** that has code changes (staged, unstaged, or recent commits)
-3. **Invoke the skill**:
-   ```
-   /autonomous-tests
-   ```
-4. **Answer first-run questions** — the skill auto-detects your project topology, services, and database, then asks about flaky areas, test credentials, and priorities
-5. **Review the proposed config** and approve it
-6. **Review the test plan** — the skill enters plan mode and waits for your approval before running anything
-7. **Tests execute** via Agent Teams, one agent per suite
-8. **Find results** in `docs/_autonomous/` (or your configured output paths)
+### 1. Install & Setup
+
+Install the skill and run the setup script (see [Installation](#installation) above).
+
+### 2. Run the Skill
+
+Navigate to your project that has code changes (staged, unstaged, or recent commits), then invoke:
+
+```
+/autonomous-tests
+```
+
+### 3. Configure Your Project
+
+On first run, the skill auto-detects your project topology, services, and database, then asks about flaky areas, test credentials, and priorities. Review the proposed config and approve it.
+
+### 4. Review & Execute
+
+The skill enters plan mode with a full test plan — review it and approve before anything executes. Tests run via Agent Teams (one agent per suite), and results land in `docs/_autonomous/`.
+
+[Back to top](#autonomous-tests)
 
 ## Usage
 
@@ -135,7 +163,7 @@ See [`references/config-schema.json`](references/config-schema.json) for the ful
 
 ### Credential Safety
 
-Always use environment variable references for credentials — never raw secrets:
+> **Warning:** Always use environment variable references for credentials — never raw secrets.
 
 ```json
 "testCredentials": {
@@ -202,6 +230,8 @@ This helps agents by providing:
 
 History is fed as "Prior Test History" in the Feature Context Document that every agent receives.
 
+[Back to top](#autonomous-tests)
+
 ## Output
 
 The skill generates up to four document types in `docs/_autonomous/`:
@@ -217,18 +247,30 @@ Files follow the naming pattern: `{YYYY-MM-DD-HH-MM-SS}_{feature-name}.md`
 
 See [`references/templates.md`](references/templates.md) for exact output formats.
 
+### Re-running Pending Fixes
+
+After fixing a bug documented in `pending-fixes/`, re-test it by targeting the pending-fix doc directly:
+
+```
+/autonomous-tests file:docs/_autonomous/pending-fixes/<the-file-name>.md
+```
+
+> **Tip:** Run `/clear` first to start with a clean context — this reduces token usage and avoids carrying over stale conversation state.
+
+[Back to top](#autonomous-tests)
+
 ## How It Works
 
 ```
-Phase 0: Config    → Setup, validate config, scan capabilities
-Phase 1: Safety    → Block if production indicators found
-Phase 2: Startup   → Health-check and start services
-Phase 3: Discovery → Analyze diff, file refs, _autonomous history
-Phase 4: Plan      → Generate test plan (you approve this)
-Phase 5: Execute   → Capability-aware Agent Teams run suites
-Phase 6: Fix       → Auto-fix runtime issues, document bugs
-Phase 7: Docs      → Generate markdown reports
-Phase 8: Cleanup   → Remove test data, verify clean state
+Phase 0: Config     ← Setup, validate, scan capabilities
+Phase 1: Safety     ← Block if production detected
+Phase 2: Startup    ← Health-check and start services
+Phase 3: Discovery  ← Analyze diff, file refs, history
+Phase 4: Plan       ← Generate test plan (you approve)
+Phase 5: Execute    ← Agent Teams run suites in parallel
+Phase 6: Fix        ← Auto-fix runtime issues, document bugs
+Phase 7: Docs       ← Generate markdown reports
+Phase 8: Cleanup    ← Remove test data, verify clean state
 ```
 
 - **Phase 0** loads your config or walks you through first-run setup. Scans for available capabilities (Docker MCPs, agent-browser, Playwright, Stripe CLI) and caches results. Returning runs validate the config, check trust, and refresh stale capabilities.
@@ -240,6 +282,8 @@ Phase 8: Cleanup   → Remove test data, verify clean state
 - **Phase 6** auto-fixes runtime issues (env vars, containers) up to 3 times. Code bugs are documented and shown to you.
 - **Phase 7** generates timestamped markdown reports from templates.
 - **Phase 8** removes test data by prefix, verifies cleanup with DB queries, and logs every action.
+
+[Back to top](#autonomous-tests)
 
 ## Troubleshooting
 
@@ -269,6 +313,8 @@ python3 -c "import hashlib,os;print(hashlib.sha256(os.path.realpath('.').encode(
 ```
 
 The next `/autonomous-tests` run will re-trigger first-run setup.
+
+[Back to top](#autonomous-tests)
 
 ## Project Structure
 
