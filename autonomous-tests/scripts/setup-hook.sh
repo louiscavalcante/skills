@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # setup-hook.sh — Configure Claude Code settings for the autonomous-tests skill.
 #
-# Installs two things into ~/.claude/settings.json:
+# Installs three things into ~/.claude/settings.json:
 #   1. ExitPlanMode approval hook (forces plan approval even in dontAsk mode)
 #   2. CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS env flag (enables agent teams)
+#   3. Model set to claude-opus-4-6 (required for agent team reasoning)
 #
 # The autonomous-tests skill already includes the hook as a skill-scoped hook,
 # so this script is only needed if you want the behavior globally.
@@ -91,6 +92,13 @@ else:
     settings["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
     changes.append("agent teams feature flag")
 
+# 3. Ensure model is set to Opus 4.6
+if settings.get("model") == "claude-opus-4-6":
+    print("\033[0;32mModel already set to claude-opus-4-6.\033[0m")
+else:
+    settings["model"] = "claude-opus-4-6"
+    changes.append("model set to claude-opus-4-6")
+
 if not changes:
     print("\nNo changes needed — all settings already configured.")
     sys.exit(0)
@@ -119,5 +127,6 @@ echo ""
 echo "What was configured:"
 echo "  - ExitPlanMode hook: ensures plan approval is always required, even in dontAsk mode"
 echo "  - Agent teams: enables CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS for parallel test execution"
+echo "  - Model: claude-opus-4-6 (required for agent team reasoning capabilities)"
 echo ""
 echo "To undo, edit $SETTINGS_FILE manually or restore from ${SETTINGS_FILE}.bak"

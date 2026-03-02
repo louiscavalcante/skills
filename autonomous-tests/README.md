@@ -4,6 +4,10 @@ Project-agnostic autonomous E2E test runner for Claude Code.
 
 Analyzes your code changes (and optional doc file references), auto-detects available testing tools, learns from previous test runs, generates a test plan for your approval, then executes end-to-end tests in parallel using Agent Teams — all against your local stack. Produces structured markdown reports and cleans up after itself.
 
+## Token Usage
+
+This skill is **token-intensive by design**. It uses **Claude Opus 4.6** — the most advanced model available — for both the main orchestrator and every spawned agent teammate. Opus has adaptive reasoning/thinking built-in that scales with problem complexity, which means test agents think as deeply as needed to catch subtle bugs, race conditions, and edge cases. The tradeoff is higher token consumption per run compared to skills that use lighter models. Each test suite spawns a dedicated Opus agent, so runs with many suites will consume tokens proportionally.
+
 ## What It Does
 
 - **Analyzes git diffs** to identify features, endpoints, and database operations touched
@@ -40,21 +44,23 @@ Then run the setup script to configure required settings:
 bash ~/.claude/skills/louiscavalcante-skills/autonomous-tests/scripts/setup-hook.sh
 ```
 
-The setup script configures two things in `~/.claude/settings.json`:
+The setup script configures three things in `~/.claude/settings.json`:
 1. **ExitPlanMode hook** — forces plan approval even in `dontAsk` mode
 2. **Agent Teams flag** — enables `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` for parallel execution
+3. **Model** — sets `claude-opus-4-6` as the default model (required for agent team reasoning capabilities)
 
 ### Manual Install
 
 If you prefer not to use [skills.sh](https://skills.sh/):
 
 1. Clone the repo and copy the `autonomous-tests/` directory into your Claude Code skills directory
-2. Enable Agent Teams — add to `~/.claude/settings.json`:
+2. Enable Agent Teams and set the model — add to `~/.claude/settings.json`:
    ```json
    {
      "env": {
        "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
-     }
+     },
+     "model": "claude-opus-4-6"
    }
    ```
 3. (Optional) Add the global ExitPlanMode hook — add to `~/.claude/settings.json` under `hooks.PreToolUse`:
@@ -98,6 +104,8 @@ If you prefer not to use [skills.sh](https://skills.sh/):
 | `working-tree` | Staged + unstaged changes (same as default) |
 | `file:<path>` | Use a `.md` doc as additional test context (path relative to project root) |
 | `rescan` | Force re-scan of capabilities regardless of cache |
+
+> **Note:** The default scope (`working-tree`) requires staged or unstaged changes to exist. If your working tree is clean, the skill will stop and ask you to either specify a commit range (e.g., `/autonomous-tests 3` for the last 3 commits) or make changes first.
 
 Arguments are combinable. Examples:
 ```
@@ -237,6 +245,7 @@ Phase 8: Cleanup   → Remove test data, verify clean state
 
 | Problem | Cause | Fix |
 |---|---|---|
+| "Working tree is clean" | No staged/unstaged changes with default scope | Use `/autonomous-tests N` for last N commits, or make changes first |
 | "Agent teams not enabled" | Missing feature flag | Run `bash scripts/setup-hook.sh` |
 | Config validation fails | Schema version mismatch | Delete `.claude/autonomous-tests.json`, re-run |
 | Services won't start | Docker not running | Check `docker info` |
