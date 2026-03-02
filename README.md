@@ -1,3 +1,6 @@
+[![Release](https://img.shields.io/github/v/release/louiscavalcante/skills?include_prereleases&sort=semver)](https://github.com/louiscavalcante/skills/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 # Skills for Claude Code
 
 Reusable, project-agnostic skills that extend Claude Code with specialized autonomous workflows.
@@ -30,8 +33,12 @@ Skills are markdown-defined capabilities that teach Claude Code new workflows. T
 
 ## Contributing
 
-To add a new skill to this repo, follow the structure of existing skills and include a `SKILL.md` (Claude-facing definition) and a `README.md` (human-facing docs). The [skill-creator](/skill-creator) skill can help scaffold new skills.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on adding skills, commit conventions, and versioning.
+
+## Changelog
+
+See [RELEASE-NOTES.md](RELEASE-NOTES.md) for the full release history.
 
 ## License
 
-MIT
+[MIT](LICENSE)
