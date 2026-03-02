@@ -1,6 +1,6 @@
 {
-  "$schema": "autonomous-tests-config-v3",
-  "version": 3,
+  "$schema": "autonomous-tests-config-v4",
+  "version": 4,
   "initialized": "ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ)",
   "lastRun": "ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ)",
   "project": {
@@ -64,5 +64,26 @@
     },
     "testingPriorities": ["description | null"],
     "notes": "free-form user notes | null"
+  },
+  "capabilities": {
+    "dockerMcps": [
+      {
+        "name": "mcp-server-name",
+        "description": "what it provides",
+        "mode": "sandbox | staging | local | unknown",
+        "safe": true
+      }
+    ],
+    "frontendTesting": {
+      "agentBrowser": false,
+      "playwright": false
+    },
+    "stripeCli": {
+      "available": false,
+      "mode": "sandbox | test | live | unknown",
+      "blocked": false
+    },
+    "lastScanned": "ISO-8601 UTC",
+    "rescanThresholdDays": 7
   }
 }

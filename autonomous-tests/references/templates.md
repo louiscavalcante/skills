@@ -16,6 +16,9 @@ Reference file for Phase 7 documentation. Follow these structures exactly when g
 - **Commits tested**: `{short-sha}` ({summary}) [+ more if multiple]
 - **Environment**: Local ({services list with versions/modes})
 - **Prior E2E run**: `{path}` ({date}, {summary}) [omit if first run]
+- **Capabilities**: {list of capabilities used} [omit if none]
+- **File reference**: `{path}` [omit if none]
+- **Prior history**: {count} related docs found in _autonomous/ [omit if none]
 
 ## Summary
 

@@ -1,8 +1,8 @@
 ---
 name: autonomous-tests
 description: 'Run autonomous E2E tests. Args: staged | unstaged | N (last N commits) | working-tree
-  (default: working-tree with smart doc analysis). Example: /autonomous-tests 3'
-argument-hint: 'staged | unstaged | N (last N commits) | working-tree'
+  | file:<path> | rescan (default: working-tree with smart doc analysis). Example: /autonomous-tests 3 file:docs/feature.md'
+argument-hint: 'staged | unstaged | N | working-tree | file:<path> | rescan'
 disable-model-invocation: true
 allowed-tools: Bash(*), Read(*), Write(*), Edit(*), Glob(*), Grep(*), Agent(*),
   EnterPlanMode(*), ExitPlanMode(*), TaskCreate(*),
@@ -26,6 +26,7 @@ hooks:
 - Docker: !`docker compose ps 2>/dev/null | head -10 || echo "No docker-compose found"`
 - Config: !`test -f .claude/autonomous-tests.json && echo "YES" || echo "NO -- first run"`
 - Agent Teams: !`python3 -c "import json;s=json.load(open('$HOME/.claude/settings.json'));print('ENABLED' if s.get('env',{}).get('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS')=='1' else 'DISABLED')" 2>/dev/null || echo "DISABLED -- settings not found"`
+- Capabilities: !`python3 -c "import json;c=json.load(open('.claude/autonomous-tests.json')).get('capabilities',{});mcps=len(c.get('dockerMcps',[]));ab='Y' if c.get('frontendTesting',{}).get('agentBrowser') else 'N';pw='Y' if c.get('frontendTesting',{}).get('playwright') else 'N';sc='Y' if c.get('stripeCli',{}).get('available') else 'N';print(f'MCPs:{mcps} agent-browser:{ab} playwright:{pw} stripe-cli:{sc} scanned:{c.get(\"lastScanned\",\"never\")}')" 2>/dev/null || echo "NOT SCANNED"`
 
 ## Role
 
@@ -40,6 +41,10 @@ Project-agnostic autonomous E2E test runner. Exercise features against the live 
 | `unstaged` | Unstaged changes only |
 | `N` (number) | Last N commits only (e.g., `1` = last commit, `3` = last 3) |
 | `working-tree` | Staged + unstaged changes (same as default) |
+| `file:<path>` | Use a `.md` doc as additional test context (relative to project root). Combinable with other args. |
+| `rescan` | Force re-scan of capabilities regardless of cache. Combinable with other args. |
+
+Args are space-separated. `file:` prefix is detected and the path validated as an existing `.md` file relative to project root. Multiple args can be combined (e.g., `staged file:docs/feature.md rescan`).
 
 Smart doc analysis is always active: identify which `docs/` files are relevant to the changed code by path, feature name, and cross-references — read only those, never all docs.
 
@@ -62,15 +67,31 @@ Read `~/.claude/settings.json` and check two things:
    > The `ExitPlanMode` approval hook ensures test plans require your approval before execution (even in `dontAsk` mode). This skill includes it as a skill-scoped hook, so it works automatically during `/autonomous-tests` runs. To also enable it globally, the setup script above already handles it.
    Then continue — do not block on this.
 
-**Step 1: Run `test -f .claude/autonomous-tests.json && echo "CONFIG_EXISTS" || echo "CONFIG_MISSING"` in Bash.**
+**Step 1: Capabilities Scan**
+
+Scan triggers: `rescan` argument is present, `capabilities` section is missing from config, or `capabilities.lastScanned` is older than `capabilities.rescanThresholdDays` (default 7 days).
+
+If none of the triggers are met, skip this step and use cached capabilities.
+
+When triggered, run three checks in parallel:
+
+1. **Docker MCP Discovery**: Use `mcp-find` to search for available MCPs (e.g., query "stripe", "database", "testing"). For each result, record `name`, `description`, infer `mode` from context (sandbox/staging/local/unknown), and set `safe: true` only for well-known sandbox MCPs. Agents can later `mcp-add` safe MCPs at runtime. If `mcp-find` is unavailable or errors, set `dockerMcps` to an empty array and continue.
+
+2. **Frontend Testing**: Run `which agent-browser` to check for agent-browser availability. Check for playwright via `which playwright` or `npx playwright --version`. Set booleans in `frontendTesting.agentBrowser` and `frontendTesting.playwright`.
+
+3. **Stripe CLI**: Run `which stripe`. If available, run `stripe config --list 2>/dev/null` to detect mode. If output contains `sk_live_` keys → set `mode: "live"`, `blocked: true` → **STOP and warn user**: "Stripe CLI is configured with live keys. Autonomous tests will NOT use Stripe CLI to prevent production charges. Switch to test keys or unset live keys to enable Stripe testing." If `sk_test_` found → `mode: "sandbox"`, `blocked: false`. Otherwise `mode: "unknown"`, `blocked: false`. If `which stripe` fails, set `available: false`.
+
+Write results to `capabilities` in config with `lastScanned` set to current UTC time (obtained via `date -u`).
+
+**Step 2: Run `test -f .claude/autonomous-tests.json && echo "CONFIG_EXISTS" || echo "CONFIG_MISSING"` in Bash.**
 
 Schema reference: `references/config-schema.json`.
 
 ### If output is `CONFIG_EXISTS` (returning run):
 
 1. Read `.claude/autonomous-tests.json`
-2. **Validate config version**: check that `version` equals `3` and that the required fields (`project`, `database`, `testing`) exist. If validation fails, warn the user and re-run the first-run setup below instead.
-3. **Verify config trust**: compute a SHA-256 hash of the config content (excluding the `_configHash` and `lastRun` fields) by running: `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"`. Then check if this hash exists in the **trust store** at `~/.claude/trusted-configs/` (the trust file is named after a hash of the project root: `python3 -c "import hashlib,os;print(hashlib.sha256(os.path.realpath('.').encode()).hexdigest()[:16])"` + `.sha256`). If the trust file is missing or its content doesn't match the computed hash, the config has not been approved by this user — **show the config to the user for confirmation, but redact all values in `userContext.testCredentials`** — display only the role names (keys) with values replaced by `"********"`. Never output raw credential values, env var references, or descriptions from this field. This prevents accidental exposure even if raw secrets were stored in the config. If confirmed, write the new hash to the trust store file (`mkdir -p ~/.claude/trusted-configs/` first). This prevents a malicious config committed to a repo from bypassing approval, since the trust store lives outside the repo in the user's home directory.
+2. **Validate config version**: check that `version` equals `4` and that the required fields (`project`, `database`, `testing`) exist. If `version` is `3`, perform **v3→v4 migration**: add an empty `capabilities` section (with `lastScanned: null`), bump `version` to `4`, inform the user: "Config migrated from v3 to v4. Capabilities will be scanned on this run." Then continue with the capabilities scan in Step 1 above. If version is less than `3` or required fields are missing, warn the user and re-run the first-run setup below instead.
+3. **Verify config trust**: compute a SHA-256 hash of the config content (excluding the `_configHash`, `lastRun`, and `capabilities` fields) by running: `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"`. Then check if this hash exists in the **trust store** at `~/.claude/trusted-configs/` (the trust file is named after a hash of the project root: `python3 -c "import hashlib,os;print(hashlib.sha256(os.path.realpath('.').encode()).hexdigest()[:16])"` + `.sha256`). If the trust file is missing or its content doesn't match the computed hash, the config has not been approved by this user — **show the config to the user for confirmation, but redact all values in `userContext.testCredentials`** — display only the role names (keys) with values replaced by `"********"`. Never output raw credential values, env var references, or descriptions from this field. This prevents accidental exposure even if raw secrets were stored in the config. If confirmed, write the new hash to the trust store file (`mkdir -p ~/.claude/trusted-configs/` first). This prevents a malicious config committed to a repo from bypassing approval, since the trust store lives outside the repo in the user's home directory.
 4. Re-scan for new services and update config if needed
 5. Get current UTC time by running `date -u +"%Y-%m-%dT%H:%M:%SZ"` in Bash, then update `lastRun` with that exact value (never guess the time)
 6. If `userContext` is missing or all arrays are empty, run the **User Context Questionnaire** below once, then save answers to config
@@ -84,15 +105,16 @@ Schema reference: `references/config-schema.json`.
    - `monorepo` — one repo, multiple packages (detected via: workspace configs like `lerna.json`, `nx.json`, `turbo.json`, `pnpm-workspace.yaml`; multiple `package.json` in subdirs; or conventional directory structures like `backend/` + `frontend/`, `server/` + `client/`, `api/` + `web/`, `packages/`)
    - `multi-repo` — separate repos that work together as a system (detected via: CLAUDE.md references to other paths, sibling directories with their own `.git`, shared docker-compose networking, cross-repo API URLs like `localhost:3000` called from another project)
 3. **Discover related projects** — scan for sibling directories with `.git` or `package.json`, grep CLAUDE.md and compose files for paths outside the project root. For each candidate found, ask the user: "Is `{path}` part of this system? What is its role?" Populate the `relatedProjects` array with confirmed entries.
-4. **User Context Questionnaire** — present all questions at once, accept partial answers:
+4. **Capabilities scan** — run Step 1 above (capabilities scan) before the User Context Questionnaire so detected capabilities can inform the config proposal.
+5. **User Context Questionnaire** — present all questions at once, accept partial answers:
    - Any known flaky areas or intermittent failures?
    - Test user credentials to use (reference env var names or role names, never raw values)?
    - Any specific testing priorities or focus areas?
    - Any additional notes for the test runner?
    Store answers in the `userContext` section of the config.
-5. **Propose config** → STOP and wait for user to confirm → write config
-6. **Stamp config trust**: after writing, compute the config hash with `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"` and write the result to the trust store at `~/.claude/trusted-configs/{project-hash}.sha256` (create the directory if needed). This marks the config as user-approved in a location outside the repo that cannot be forged by a committed file.
-7. If project CLAUDE.md < 140 lines and lacks startup instructions, append max 10 lines.
+6. **Propose config** → STOP and wait for user to confirm → write config
+7. **Stamp config trust**: after writing, compute the config hash with `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"` and write the result to the trust store at `~/.claude/trusted-configs/{project-hash}.sha256` (create the directory if needed). This marks the config as user-approved in a location outside the repo that cannot be forged by a committed file.
+8. If project CLAUDE.md < 140 lines and lacks startup instructions, append max 10 lines.
 
 ## Phase 1 — Safety
 
@@ -107,16 +129,28 @@ For each service in config **and each related project with a `startCommand`**: h
 All identification is fully autonomous — derive everything from the code diff and codebase. Never ask the user what to test.
 
 1. Get changed files from git based on scope arguments — **include related projects** (`relatedProjects[].path`) when tracing cross-project dependencies (e.g., backend API change that affects webapp pages)
-2. Read every changed file. For each, build a **feature map**:
+2. **File reference processing**: if `file:<path>` was provided, read the `.md` file. Extract feature descriptions, acceptance criteria, endpoints, edge cases, and any test scenarios described in the doc. This supplements (doesn't replace) diff-based discovery — merge file reference insights with diff analysis.
+3. Read every changed file. For each, build a **feature map**:
    - API endpoints affected (routes, controllers, handlers)
    - Database operations (queries, writes, schema changes, index usage)
    - External service integrations (webhooks, SDK calls, third-party APIs)
    - Business logic and validation rules
    - Authentication/authorization flows touched
    - Signal/event chains (pub/sub, queues, outbox patterns)
-3. Trace the full dependency graph: callers → changed code → callees. Follow imports across files and project boundaries to understand the complete blast radius.
-4. **Smart doc analysis**: identify docs relevant to the changed code by matching file paths, feature names, endpoint references, and `testing.contextFiles` entries. Scan the `docs/` tree but read only relevant files — never read all docs indiscriminately. Skip purely historical or unrelated docs.
-5. Produce a **Feature Context Document** (kept in memory, not written to disk) summarizing: all features touched, all endpoints, all DB collections/tables affected, all external services involved, and all edge cases identified from reading the code (error handlers, validation branches, race conditions, retry logic). This document is cascaded to every agent in Phase 5.
+4. Trace the full dependency graph: callers → changed code → callees. Follow imports across files and project boundaries to understand the complete blast radius.
+5. **Smart doc analysis**:
+
+   **a. Standard doc analysis**: identify docs relevant to the changed code by matching file paths, feature names, endpoint references, and `testing.contextFiles` entries. Scan the `docs/` tree but read only relevant files — never read all docs indiscriminately. Skip purely historical or unrelated docs.
+
+   **b. _autonomous folder scan**: scan the configured documentation output directories (`documentation.testResults`, `documentation.pendingFixes`, `documentation.pendingGuidedTests`, `documentation.pendingAutonomousTests` paths from config). Match filenames — which contain `{feature-name}` — against current features, endpoints, and files from the feature map. For matches, read **only** the Summary and Issues Found sections (do not read full documents). Extract:
+   - Previously failing tests for the same features
+   - Known bugs and pending fixes related to current changes
+   - Guided tests that may now be automatable (e.g., agent-browser is now available)
+   - Pending autonomous tests queued from earlier runs that target the same features
+
+   Feed extracted findings as a "Prior Test History" section in the Feature Context Document.
+
+6. Produce a **Feature Context Document** (kept in memory, not written to disk) summarizing: all features touched, all endpoints, all DB collections/tables affected, all external services involved, all edge cases identified from reading the code (error handlers, validation branches, race conditions, retry logic), prior test history from `_autonomous/` scans, file reference content (if provided), and available capabilities from config. This document is cascaded to every agent in Phase 5.
 
 ## Phase 4 — Test Plan (Plan Mode)
 
@@ -153,7 +187,15 @@ Use `TeamCreate` to create a test team. Spawn `general-purpose` Agents as teamma
 
 **Credential sharing — CRITICAL**: Assign each agent a **distinct test credential** from `userContext.testCredentials` to prevent session conflicts (e.g., one agent logging in invalidates another's token). If only one credential exists, run agents **sequentially** — never in parallel with shared auth. Include only the **role name** (key from `testCredentials`) in each agent's task description — never the credential value or env var reference. Each agent must resolve its assigned credential by reading the config file or environment at runtime.
 
-**Cascading context — CRITICAL**: Every agent MUST receive the full **Feature Context Document** from Phase 3 in its task description. This includes: all features touched, all endpoints, all DB collections affected, all external services involved, and all identified edge cases. Agents need this complete picture to understand cross-feature side-effects (e.g., testing endpoint A may break endpoint B's state).
+**Cascading context — CRITICAL**: Every agent MUST receive the full **Feature Context Document** from Phase 3 in its task description. This includes: all features touched, all endpoints, all DB collections affected, all external services involved, all identified edge cases, prior test history, and available capabilities. Agents need this complete picture to understand cross-feature side-effects (e.g., testing endpoint A may break endpoint B's state).
+
+**Capability-aware execution**: Agents should leverage detected capabilities from config when relevant to their test suite:
+- Use `agent-browser` if `frontendTesting.agentBrowser` is true and the suite involves UI testing or browser-based verification
+- Use playwright if `frontendTesting.playwright` is true for frontend component or integration tests
+- Use `mcp-add` to activate Docker MCPs from `dockerMcps` that are marked `safe: true` and relevant to the test needs (e.g., a Stripe sandbox MCP for payment tests)
+- Use Stripe CLI if `stripeCli.available` is true and `stripeCli.blocked` is false for webhook forwarding, payment intent testing, or event simulation
+- **NEVER** activate MCPs where `safe: false` — these may be production or unknown-mode services
+- **NEVER** use Stripe CLI when `stripeCli.blocked` is true — this indicates live keys are configured
 
 **Anomaly detection**: Each agent must actively watch for and report:
 - Duplicate records created by repeated API calls
@@ -206,3 +248,7 @@ Remove only test data created during this run (identified by `testDataPrefix` fr
 - Never share auth tokens/sessions between agents — assign distinct credentials or run sequentially (see Phase 5)
 - If no unit tests exist → note in report, do not treat as a failure
 - Use UTC timestamps everywhere (docs, config, logs) — always obtain from `date -u`, never guess
+- Never activate Docker MCPs where `safe: false` — these may be production or unknown-mode services
+- Never use Stripe CLI when `stripeCli.blocked` is true — live keys are configured
+- Capabilities are auto-detected — never ask the user to manually configure them
+- When reading `_autonomous/` history, read only Summary and Issues Found sections — never read full historical documents
