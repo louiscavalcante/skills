@@ -171,7 +171,7 @@ Same as [`autonomous-tests` configuration](../autonomous-tests/README.md#configu
 | Field | Description |
 |---|---|
 | `dockerContext` | Docker context to use (auto-detected, Docker Desktop prioritized) |
-| `mode` | `compose` or `raw-docker` — how to spin up agent environments |
+| `mode` | `compose`, `raw-docker`, or `npm-dev` — how to spin up agent environments |
 | `composeFile` | Path to compose file (compose mode only) |
 | `composePath` | Directory containing the compose file |
 | `rawDockerServices` | Service definitions for raw Docker mode |
@@ -180,7 +180,7 @@ Same as [`autonomous-tests` configuration](../autonomous-tests/README.md#configu
 | `maxAgents` | Maximum parallel agents (default: 5) |
 | `portMappings` | Service-to-port mappings with health checks |
 | `initialization` | Commands to run after services start (migrations, seeds) |
-| `relatedServices` | Additional projects to include in each agent's stack |
+| `relatedServices` | Additional projects to include in each agent's stack (supports `compose`, `raw-docker`, and `npm-dev` modes per service) |
 | `cleanup` | Teardown options (remove volumes, orphans) |
 
 See [`references/config-schema-swarm.json`](references/config-schema-swarm.json) for the full schema.
@@ -261,13 +261,13 @@ Phase 9: Advisory        ← Remind user to /clear before next skill
 
 Each agent follows this sequence:
 
-1. **Generate environment** — create modified compose file (or docker run commands) with remapped ports in `/tmp/autonomous-swarm-{sessionId}/agent-{N}/`
+1. **Generate environment** — create modified compose file (or docker run commands) with remapped ports in `/tmp/autonomous-swarm-{sessionId}/agent-{N}/`. For `npm-dev` related services, copy the project to the agent's temp dir (symlink `node_modules`) and start with unique port assignments
 2. **Start stack** — `docker compose -p swarm-{N} ... up -d` (or `docker run` commands)
 3. **Health check** — poll each service until healthy (60s timeout, 2 attempts)
 4. **Initialize** — run migrations, seeds, and setup commands
 5. **Execute tests** — run assigned suites against own API (using remapped ports)
 6. **Report** — send PASS/FAIL per suite via `SendMessage`
-7. **Teardown** — stop and remove all containers, volumes, networks, temp files
+7. **Teardown** — stop and remove all containers, volumes, networks, `npm-dev` processes, temp files
 
 If an agent's environment fails to start, its suites are redistributed to a healthy agent.
 
@@ -286,6 +286,7 @@ If an agent's environment fails to start, its suites are redistributed to a heal
 | "Docker Desktop context not found" | Docker Desktop not installed | Use `default` context — skill will auto-detect |
 | Health check timeout | Services slow to start | Increase `waitAfterStartSeconds` in config |
 | Suite redistribution | Agent env failed to start | Normal — suites move to healthy agents |
+| `.next` / build lock conflicts | `npm-dev` service running from original dir | Set related service `mode: "npm-dev"` — agents copy the project to `/tmp/` for isolation |
 
 ### Emergency Cleanup
 

@@ -38,7 +38,14 @@
       "project-name": {
         "composePath": "/absolute/path/to/related | null",
         "composeFile": "docker-compose.yml | null",
-        "mode": "compose | raw-docker",
+        "mode": "compose | raw-docker | npm-dev — npm-dev runs on host via startCommand with per-agent isolation",
+        "startCommand": "npm run dev | null — host process start command (npm-dev mode only)",
+        "projectPath": "/absolute/path/to/project | null — source directory to copy for isolation (npm-dev mode only)",
+        "envOverrides": {
+          "PORT": "{port}",
+          "NEXT_PUBLIC_API_URL": "http://localhost:{backendPort}",
+          "_comment": "env vars resolved per-agent — {port} and {backendPort} from assigned range"
+        },
         "portMappings": [
           {
             "service": "webapp",

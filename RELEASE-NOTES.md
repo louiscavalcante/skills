@@ -7,6 +7,7 @@
 - **CLAUDE.md scanning for external services** (Phase 0): Scans project, global, and local CLAUDE.md files for service keywords from the catalog. Auto-detects relevant CLIs.
 - **Generic external service CLI gating** (Phase 5): Per-service user confirmation using catalog-defined prompt templates.
 - **Config schema v5**: `externalServices[].cli` sub-object replaces `capabilities.stripeCli`. Includes `source`, `allowedOperations`, `prohibitedFlags`, `approvedThisRun`.
+- **`npm-dev` mode for swarm related services** (autonomous-tests-swarm): Related services that run on the host (e.g., `npm run dev`) are now copied to each agent's temp directory with `node_modules` symlinked. Each agent gets its own build cache (`.next/`, `dist/`), eliminating lock file conflicts between parallel agents.
 
 ### Changed
 - **Zero service-specific references in SKILL.md**: All Stripe CLI references removed from both skill instruction files. Service-specific knowledge lives exclusively in the catalog.

@@ -126,7 +126,11 @@ Schema reference: the base config uses `autonomous-tests/references/config-schem
 2. **Compose mode**: Parse compose file to extract service names and port mappings → populate `portMappings`
 3. **Raw Docker mode**: Ask user which images/containers the project uses, what ports they expose, what env vars they need → populate `rawDockerServices`
 4. Ask: "What initialization commands should run after services start?" (migrations, seeds, indexes, init scripts)
-5. For each related project: "Does `{name}` need its own services in the agent's test stack? (e.g., webapp needs the backend API running)" → populate `relatedServices`
+5. For each related project: "Does `{name}` need its own services in the agent's test stack? (e.g., webapp needs the backend API running)" For each confirmed related project, detect its mode:
+   - If it has a compose file → `mode: "compose"`
+   - If it uses Docker containers without compose → `mode: "raw-docker"`
+   - If it runs on the host via `npm run dev`, `yarn dev`, or similar (no containers) → `mode: "npm-dev"`. Record `startCommand`, `projectPath`, and `envOverrides` (port, backend URL, etc.).
+   Populate `relatedServices` with the detected mode and settings.
 6. Ask: "Maximum parallel agents?" (default: 5)
 7. Save swarm section to config and re-stamp config trust
 
@@ -274,7 +278,7 @@ Use `TeamCreate` to create a test team. Spawn `general-purpose` Agents as teamma
    - Generate a modified compose file at `/tmp/autonomous-swarm-{sessionId}/agent-{N}/docker-compose.yml` with:
      - All host ports remapped to agent's assigned range
      - Container names namespaced via `-p swarm-{N}`
-   - If related projects are needed: read their compose file, generate modified version in same dir, ensure services share a Docker network
+   - If related projects with `mode: "compose"` are needed: read their compose file, generate modified version in same dir, ensure services share a Docker network
    - Start: `docker compose -p swarm-{N} -f /tmp/autonomous-swarm-{sessionId}/agent-{N}/docker-compose.yml up -d`
 
    **c. Environment setup (raw Docker mode)**:
@@ -283,6 +287,13 @@ Use `TeamCreate` to create a test team. Spawn `general-purpose` Agents as teamma
    - Create a Docker network: `docker network create swarm-{N}-net`
    - Connect all containers: `docker network connect swarm-{N}-net swarm-{N}-{service}`
    - If related projects need raw Docker services, start them and connect to the same network
+
+   **c2. Related service setup (npm-dev mode)** — for related services with `mode: "npm-dev"`:
+   - **Copy project**: `rsync -a --exclude node_modules --exclude .next --exclude dist --exclude .turbo {projectPath}/ /tmp/autonomous-swarm-{sessionId}/agent-{N}/{serviceName}/`
+   - **Symlink node_modules**: `ln -s {projectPath}/node_modules /tmp/autonomous-swarm-{sessionId}/agent-{N}/{serviceName}/node_modules` — avoids reinstalling dependencies while giving each agent its own build cache
+   - **Resolve env overrides**: substitute `{port}` and `{backendPort}` from the agent's assigned port range in `envOverrides`
+   - **Start process**: `cd /tmp/autonomous-swarm-{sessionId}/agent-{N}/{serviceName} && {envVars} {startCommand} &` — run in background, capture PID to `agent-{N}-{serviceName}.pid` in the agent's temp dir
+   - Each agent gets its own working directory, so framework build artifacts (`.next/`, `dist/`, lock files) are fully isolated
 
    **d. Health check**: Poll each service using remapped ports (from `portMappings[].healthCheck` with `{port}` and `{containerName}` resolved). Timeout: 60s. If unhealthy after 2 attempts, **report failure** via `SendMessage` — orchestrator redistributes suites to a healthy agent.
 
@@ -305,7 +316,8 @@ Use `TeamCreate` to create a test team. Spawn `general-purpose` Agents as teamma
    - Compose mode: `docker compose -p swarm-{N} -f /tmp/autonomous-swarm-{sessionId}/agent-{N}/docker-compose.yml down -v --remove-orphans`
    - Raw Docker mode: `docker stop $(docker ps -q --filter name=swarm-{N}) && docker rm $(docker ps -aq --filter name=swarm-{N}) && docker network rm swarm-{N}-net`
    - Same for related project containers/compose if started
-   - Remove `/tmp/autonomous-swarm-{sessionId}/agent-{N}/` directory
+   - npm-dev mode: kill processes by PID from `agent-{N}-{serviceName}.pid` files (`kill $(cat /tmp/autonomous-swarm-{sessionId}/agent-{N}/agent-{N}-{serviceName}.pid) 2>/dev/null`)
+   - Remove `/tmp/autonomous-swarm-{sessionId}/agent-{N}/` directory (covers both compose copies and npm-dev project copies)
    - Verify no lingering containers: `docker ps -a --filter name=swarm-{N} -q`
 
 4. Spawn agents with `team_name` and assign tasks via `TaskUpdate` with `owner`
@@ -380,7 +392,8 @@ After all phases complete, display this message prominently:
 - **Never run initialization commands against the shared/main stack — only against agent-owned stacks**
 - **Always detect and use Docker Desktop context when available — prioritize over default context**
 - **All temp files go in `/tmp/` (OS temp dir) — never pollute the project directory**
-- **Clean up `/tmp/autonomous-swarm-{sessionId}/` at the end of every run, even on failure**
+- **Never run `npm-dev` related services from the original project directory — always copy to the agent's temp dir to prevent build artifact and lock file conflicts between parallel agents**
+- **Clean up `/tmp/autonomous-swarm-{sessionId}/` at the end of every run, even on failure — includes both Docker compose copies and npm-dev project copies**
 
 ## Operational Bounds
 
