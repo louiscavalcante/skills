@@ -1,5 +1,20 @@
 # Release Notes
 
+## v1.5.0 (2026-03-03)
+
+### Added
+- **Env file port remapping** (autonomous-tests-swarm): `.env` / `.env.local` files are copied to each agent's temp directory and port values are remapped per agent. Supports `direct` ports (`PORT=8000`) and `url`-embedded ports (`DATABASE_URL=postgres://localhost:5432/db`). Original files are never modified.
+- **`swarm.envFiles`** config field: lists env files to copy and remap per agent, with `scope` (primary or related service) and `source` (compose `env_file:`, auto-detected, or user-configured).
+- **`swarm.envPortMappings`** config field: maps env var names to services for port remapping — `direct` type replaces bare port values, `url` type replaces ports within URLs.
+- **Bundler-compatible `node_modules` strategy** (autonomous-tests-swarm): `nodeModulesStrategy` config field on related services — `symlink` (default, fast), `hardlink` (`cp -al`, Turbopack/rspack compatible), or `copy` (`cp -r`, universal). Auto-detected from `package.json` bundler during Swarm Configuration Questionnaire.
+- **`{backendPort}` template placeholder**: resolves to the assigned host port for the backend service in the primary compose stack.
+
+### Changed
+- **Phase 0 Swarm Questionnaire**: detects env files from compose `env_file:` directives and directory scans, identifies port-related variables via heuristics, and presents mappings for user confirmation.
+- **Phase 5 setup agent**: copies and remaps env files per agent before suite agents start — updates compose `env_file:` paths and npm-dev project env files.
+- **Phase 5 npm-dev mode**: node_modules setup uses `nodeModulesStrategy` instead of always symlinking — hardlink mode resolves Turbopack symlink incompatibility.
+- **Operational Bounds**: system command allowlist includes `python3 -c` with `re` stdlib for env file remapping and `cp -al` for hardlink node_modules. Data access scope documents env file copies.
+
 ## v1.4.0 (2026-03-03)
 
 ### Added

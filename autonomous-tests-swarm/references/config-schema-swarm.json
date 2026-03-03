@@ -27,6 +27,21 @@
         "healthCheck": "curl -sf http://localhost:{port}/_health/live | null"
       }
     ],
+    "envFiles": [
+      {
+        "path": ".env | .env.local",
+        "scope": "primary | related:<service-name>",
+        "source": "compose-env_file | auto-detected | user-configured"
+      }
+    ],
+    "envPortMappings": [
+      {
+        "varName": "PORT | DATABASE_URL | NEXT_PUBLIC_API_URL",
+        "service": "backend | database | webapp",
+        "type": "direct | url",
+        "_comment": "direct: value IS the port (PORT=8000); url: port embedded in URL (DATABASE_URL=postgres://localhost:5432/db)"
+      }
+    ],
     "initialization": {
       "commands": [
         "docker compose -p {projectName} exec backend python manage.py migrate",
@@ -46,6 +61,7 @@
           "NEXT_PUBLIC_API_URL": "http://localhost:{backendPort}",
           "_comment": "env vars resolved per-agent — {port} and {backendPort} from assigned range"
         },
+        "nodeModulesStrategy": "symlink | hardlink | copy — symlink (default): ln -s, fast; hardlink: cp -al, Turbopack-compatible; copy: cp -r, universally compatible. Auto-detected from bundler in package.json.",
         "portMappings": [
           {
             "service": "webapp",
@@ -67,6 +83,7 @@
   "_templatePlaceholders": {
     "{projectName}": "swarm-{N} — agent's compose project / container prefix",
     "{port}": "assigned host port for that service",
+    "{backendPort}": "assigned host port for the backend service (primary compose stack)",
     "{containerName}": "swarm-{N}-{service} — container name",
     "{sessionId}": "unique session identifier (timestamp-based, from date -u +%Y%m%d%H%M%S)"
   }

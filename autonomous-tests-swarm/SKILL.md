@@ -126,6 +126,15 @@ Schema reference: the base config uses `autonomous-tests/references/config-schem
 
 1. **Detect mode**: Check for compose files in `project.services[].path` and project root. If found → `mode: "compose"`. If no compose file but project uses Docker containers (detected from `project.services[].type` or `docker ps`) → `mode: "raw-docker"`. Ask user to confirm.
 2. **Compose mode**: Parse compose file to extract service names and port mappings → populate `portMappings`
+2b. **Env file detection**:
+   - Parse compose file for `env_file:` directives → record referenced paths in `swarm.envFiles` with `source: "compose-env_file"` and `scope: "primary"`
+   - Scan compose directory and related project directories for `.env` / `.env.local` files not already recorded → add with `source: "auto-detected"` and appropriate `scope` (`primary` or `related:<service-name>`)
+   - For each env file, scan for port-related variables using heuristics:
+     - Value exactly matches a known `containerPort` from `portMappings` AND variable name contains `PORT` → add to `envPortMappings` with `type: "direct"`
+     - Value contains `localhost:{containerPort}` or `127.0.0.1:{containerPort}` → add to `envPortMappings` with `type: "url"`
+   - Present detected `envPortMappings` to user for confirmation via `AskUserQuestion`
+   - Store confirmed mappings in `swarm.envFiles` and `swarm.envPortMappings`
+   - If a referenced env file doesn't exist, warn and skip
 3. **Raw Docker mode**: Ask user which images/containers the project uses, what ports they expose, what env vars they need → populate `rawDockerServices`
 4. Ask: "What initialization commands should run after services start?" (migrations, seeds, indexes, init scripts)
 5. For each related project: "Does `{name}` need its own services in the agent's test stack? (e.g., webapp needs the backend API running)" For each confirmed related project, detect its mode:
@@ -270,10 +279,12 @@ Use `TeamCreate` to create a test team. Spawn `general-purpose` Agents as teamma
 **Setup agent delegation**: Before spawning suite agents, the orchestrator MUST spawn a dedicated setup agent (a `general-purpose` agent with `model: "opus"` and `team_name`) to handle aggregated environment preparation. The setup agent's task:
 1. Create the session temp directory and all per-agent subdirectories (`/tmp/autonomous-swarm-{sessionId}/agent-{N}/` for each planned agent)
 2. Generate all modified compose files (or docker run command scripts) for every agent — remapped ports, namespaced container names, related project compose files
-3. For `npm-dev` related services: copy projects to each agent's temp dir and create `node_modules` symlinks
-4. Validate all compose configs (`docker compose -f {file} config --quiet` for each)
-5. Read key source files needed for the Feature Context Document (changed files from Phase 3, model definitions, serializers, route handlers)
-6. Report back via `SendMessage`: validated environment specs per agent (confirmed compose file paths, port assignments, health check URLs, initialization commands) and the compiled Feature Context Document content
+3. For `npm-dev` related services: copy projects to each agent's temp dir. Set up `node_modules` based on `nodeModulesStrategy` — `hardlink` uses `cp -al` (fast, Turbopack-compatible; falls back to `cp -r` if hardlinks not supported), `copy` uses `cp -r`, `symlink` (default) uses `ln -s`
+4. Copy and remap env files per agent: for each file in `swarm.envFiles`, copy to `/tmp/autonomous-swarm-{sessionId}/agent-{N}/`. Apply port remapping using `swarm.envPortMappings`: `direct` type → regex `^(VAR_NAME)\s*=\s*["']?(\d+)["']?` → replace port with agent's assigned port for that service; `url` type → replace `(localhost|127\.0\.0\.1):ORIGINAL_PORT` with `localhost:ASSIGNED_PORT` (only the specific known port, to avoid false matches). Update compose `env_file:` paths to point to copies. Preserve comments, empty lines, `export` prefixes, and all non-matching variables verbatim.
+5. For npm-dev projects, apply `swarm.envPortMappings` remapping to `.env` / `.env.local` files in the copied project directory — ensures dotenv-loaded variables match the agent's port assignments
+6. Validate all compose configs (`docker compose -f {file} config --quiet` for each)
+7. Read key source files needed for the Feature Context Document (changed files from Phase 3, model definitions, serializers, route handlers)
+8. Report back via `SendMessage`: validated environment specs per agent (confirmed compose file paths, port assignments, health check URLs, initialization commands) and the compiled Feature Context Document content
 
 The orchestrator waits for the setup agent to complete before spawning suite agents. Suite agents receive pre-generated environment specs — they execute `docker compose up` and run tests, but do not generate compose files or read source files for context. After reporting, the setup agent is shut down via `SendMessage` with `type: "shutdown_request"`.
 
@@ -299,10 +310,15 @@ The orchestrator waits for the setup agent to complete before spawning suite age
 
    **c2. Related service setup (npm-dev mode)** — for related services with `mode: "npm-dev"`:
    - **Copy project**: `rsync -a --exclude node_modules --exclude .next --exclude dist --exclude .turbo {projectPath}/ /tmp/autonomous-swarm-{sessionId}/agent-{N}/{serviceName}/`
-   - **Symlink node_modules**: `ln -s {projectPath}/node_modules /tmp/autonomous-swarm-{sessionId}/agent-{N}/{serviceName}/node_modules` — avoids reinstalling dependencies while giving each agent its own build cache
+   - **Set up node_modules** based on `nodeModulesStrategy` (auto-detected or configured per related service):
+     - `symlink` (default): `ln -s {projectPath}/node_modules /tmp/autonomous-swarm-{sessionId}/agent-{N}/{serviceName}/node_modules` — fast, works with most bundlers
+     - `hardlink`: `cp -al {projectPath}/node_modules /tmp/autonomous-swarm-{sessionId}/agent-{N}/{serviceName}/node_modules` — fast, space-efficient, compatible with Turbopack/rspack. Falls back to `cp -r` if hardlinks not supported (cross-filesystem)
+     - `copy`: `cp -r {projectPath}/node_modules /tmp/autonomous-swarm-{sessionId}/agent-{N}/{serviceName}/node_modules` — slowest but universally compatible
+   - **Auto-detection**: during Swarm Configuration Questionnaire, scan `package.json` for `turbopack`, `next` (uses Turbopack by default in dev), `rspack`, or other symlink-incompatible bundlers → auto-set `nodeModulesStrategy: "hardlink"`. User can override.
    - **Resolve env overrides**: substitute `{port}` and `{backendPort}` from the agent's assigned port range in `envOverrides`
    - **Start process**: `cd /tmp/autonomous-swarm-{sessionId}/agent-{N}/{serviceName} && {envVars} {startCommand} &` — run in background, capture PID to `agent-{N}-{serviceName}.pid` in the agent's temp dir
    - Each agent gets its own working directory, so framework build artifacts (`.next/`, `dist/`, lock files) are fully isolated
+   - **Remap env files**: apply `swarm.envPortMappings` to any `.env` / `.env.local` files in the copied project directory using the agent's port resolution table — ensures dotenv-loaded variables match the agent's port assignments
 
    **d. Health check**: Poll each service using remapped ports (from `portMappings[].healthCheck` with `{port}` and `{containerName}` resolved). Timeout: 60s. If unhealthy after 2 attempts, **report failure** via `SendMessage` — orchestrator redistributes suites to a healthy agent.
 
@@ -395,6 +411,7 @@ After all phases complete, display this message prominently:
 - **Always tear down agent environments, even on failure — never leave orphaned containers**
 - **Never bind to ports already in use — always verify availability first**
 - **Never modify the project's original compose file — only generate copies in `/tmp/autonomous-swarm-{sessionId}/`**
+- **Never modify original `.env` files — only copies in `/tmp/autonomous-swarm-{sessionId}/`**
 - **Always use `docker compose -p {projectName}` for namespace isolation**
 - **Include `--remove-orphans` and `-v` in teardown to prevent volume/network leaks**
 - **If compose startup fails, do NOT retry indefinitely — report failure after 2 attempts and redistribute suites**
@@ -419,7 +436,7 @@ These bounds constrain resource usage and are enforced throughout execution:
 - **MCP scope**: Only MCPs marked `safe: true` can be activated — `safe: false` MCPs are never activated
 - **Agent lifecycle**: Each agent is spawned, starts its own Docker environment, executes suites, tears down, and is shut down — no persistent or long-lived agents
 - **External service CLI scope**: Limited to `allowedOperations` from the external services catalog per service. Per-run user confirmation required (Phase 5). Blocked entirely when `cli.blocked` is true for a service. `prohibitedFlags` and `prohibitedOperations` defined per service in the catalog are always blocked.
-- **System command allowlist**: Beyond user-approved config commands, the skill uses only these read-only or idempotent system commands: `which` (capability detection), `docker compose ps`/`docker context ls`/`docker system df` (Docker status), `git branch`/`git diff`/`git log` (diff analysis), `test -f` (file checks), `find . -maxdepth 3 -name "CLAUDE.md" -type f` (CLAUDE.md deep scan), `date -u` (UTC timestamps), `ss -tlnp`/`netstat -tlnp` (port availability), `curl -sf` to localhost URLs from config (health checks), `python3 -c` with `json`/`hashlib` stdlib only (SHA-256 hashing). The setup script (`setup-hook.sh`) modifies `~/.claude/settings.json` once at install time — not during test runs.
+- **System command allowlist**: Beyond user-approved config commands, the skill uses only these read-only or idempotent system commands: `which` (capability detection), `docker compose ps`/`docker context ls`/`docker system df` (Docker status), `git branch`/`git diff`/`git log` (diff analysis), `test -f` (file checks), `find . -maxdepth 3 -name "CLAUDE.md" -type f` (CLAUDE.md deep scan), `date -u` (UTC timestamps), `ss -tlnp`/`netstat -tlnp` (port availability), `curl -sf` to localhost URLs from config (health checks), `python3 -c` with `json`/`hashlib`/`re` stdlib (SHA-256 hashing, env file port remapping), `cp -al` (hardlink node_modules copy). The setup script (`setup-hook.sh`) modifies `~/.claude/settings.json` once at install time — not during test runs.
 - **External download scope**: Docker images are pulled only by `docker compose up` or `docker pull` from the user's own compose files or `rawDockerServices` config — image names and registries are project-defined, not skill-defined. Playwright browsers are downloaded only if Playwright is present and requires them. No other downloads occur at runtime.
-- **Data access scope**: Files read outside the project root: `~/.claude/settings.json` (read-only, Phase 0 flag checks), `~/.claude/trusted-configs/{hash}.sha256` (read/write, one hash string per project), `~/.claude/CLAUDE.md` (read-only, global instructions). CLAUDE.md files within the project are scanned up to 3 directory levels deep (read-only, project context). `.env` files within the project are scanned in Phase 1 for production indicator patterns only — variable values are pattern-matched but never stored, logged, or included in any output. Modified compose files are written only to `/tmp/autonomous-swarm-{sessionId}/` — never to the project directory.
+- **Data access scope**: Files read outside the project root: `~/.claude/settings.json` (read-only, Phase 0 flag checks), `~/.claude/trusted-configs/{hash}.sha256` (read/write, one hash string per project), `~/.claude/CLAUDE.md` (read-only, global instructions). CLAUDE.md files within the project are scanned up to 3 directory levels deep (read-only, project context). `.env` files within the project are scanned in Phase 1 for production indicator patterns only — variable values are pattern-matched but never stored, logged, or included in any output. Modified compose files and env file copies are written only to `/tmp/autonomous-swarm-{sessionId}/` — original `.env` files are never modified, and non-port values are preserved verbatim in copies.
 - **Trust boundaries**: Config file is SHA-256 verified against an out-of-repo trust store — modifications require re-approval. Untrusted inputs (git diffs, `docs/` files, `CLAUDE.md`, `file:<path>` references, `_autonomous/` history) are read for analysis only — they feed the Feature Context Document (Phase 3) which flows into the test plan (Phase 4). The test plan requires explicit user approval via ExitPlanMode hook before any execution. No content from untrusted sources is interpolated into shell commands.

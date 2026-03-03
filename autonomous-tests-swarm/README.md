@@ -180,7 +180,10 @@ Same as [`autonomous-tests` configuration](../autonomous-tests/README.md#configu
 | `maxAgents` | Maximum parallel agents (default: 5) |
 | `portMappings` | Service-to-port mappings with health checks |
 | `initialization` | Commands to run after services start (migrations, seeds) |
+| `envFiles` | List of env files to copy and remap per agent — `scope` (primary or related service), `source` (compose `env_file:`, auto-detected, user-configured) |
+| `envPortMappings` | Maps env var names to services for port remapping — `direct` (bare port) or `url` (port within URL) |
 | `relatedServices` | Additional projects to include in each agent's stack (supports `compose`, `raw-docker`, and `npm-dev` modes per service) |
+| `relatedServices.*.nodeModulesStrategy` | `symlink` (default), `hardlink` (Turbopack-compatible), or `copy` (universal) — auto-detected from bundler |
 | `cleanup` | Teardown options (remove volumes, orphans) |
 
 See [`references/config-schema-swarm.json`](references/config-schema-swarm.json) for the full schema.
@@ -194,6 +197,7 @@ Resolved per-agent at runtime:
 | `{projectName}` | `swarm-{N}` (agent's compose project name) |
 | `{port}` | Assigned host port for that service |
 | `{containerName}` | `swarm-{N}-{service}` |
+| `{backendPort}` | Assigned host port for the backend service (primary compose stack) |
 | `{sessionId}` | Unique session identifier (timestamp-based) |
 
 ### No Credentials Needed
@@ -261,7 +265,7 @@ Phase 9: Advisory        ← Remind user to /clear before next skill
 
 Each agent follows this sequence:
 
-1. **Generate environment** — create modified compose file (or docker run commands) with remapped ports in `/tmp/autonomous-swarm-{sessionId}/agent-{N}/`. For `npm-dev` related services, copy the project to the agent's temp dir (symlink `node_modules`) and start with unique port assignments
+1. **Generate environment** — create modified compose file (or docker run commands) with remapped ports in `/tmp/autonomous-swarm-{sessionId}/agent-{N}/`. Copy and remap `.env` files per agent. For `npm-dev` related services, copy the project to the agent's temp dir (set up `node_modules` via configured strategy) and start with unique port assignments
 2. **Start stack** — `docker compose -p swarm-{N} ... up -d` (or `docker run` commands)
 3. **Health check** — poll each service until healthy (60s timeout, 2 attempts)
 4. **Initialize** — run migrations, seeds, and setup commands
@@ -287,6 +291,9 @@ If an agent's environment fails to start, its suites are redistributed to a heal
 | Health check timeout | Services slow to start | Increase `waitAfterStartSeconds` in config |
 | Suite redistribution | Agent env failed to start | Normal — suites move to healthy agents |
 | `.next` / build lock conflicts | `npm-dev` service running from original dir | Set related service `mode: "npm-dev"` — agents copy the project to `/tmp/` for isolation |
+| Env vars still have original ports | `envPortMappings` missing or incomplete | Add all port-containing env vars to `swarm.envPortMappings` — use `direct` for bare ports, `url` for ports in URLs |
+| Turbopack fails with symlinked `node_modules` | Turbopack can't resolve through symlinks | Set `nodeModulesStrategy: "hardlink"` on the related service — uses `cp -al` for real directory that bundlers can resolve |
+| Browser tests hit host services instead of agent stack | Env file remapping not configured or node_modules strategy incompatible | Check `swarm.envFiles` and `swarm.envPortMappings` are configured, and `nodeModulesStrategy` is `hardlink` for Next.js/Turbopack projects |
 
 ### Emergency Cleanup
 
