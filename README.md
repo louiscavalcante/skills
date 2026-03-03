@@ -10,17 +10,21 @@ Reusable, project-agnostic skills that extend Claude Code with specialized auton
 | Skill | Description | Model | Install |
 |---|---|---|---|
 | [autonomous-tests](autonomous-tests/) | Autonomous E2E test runner — analyzes diffs, generates test plans, and executes suites in parallel via Agent Teams | Opus 4.6 | `npx skills add louiscavalcante/skills --skill autonomous-tests` |
+| [autonomous-fixes](autonomous-fixes/) | Autonomous fix runner — reads test findings, applies fixes via Agent Teams, and updates docs for re-testing (test-fix loop) | Opus 4.6 | `npx skills add louiscavalcante/skills --skill autonomous-fixes` |
 
 ## Getting Started
 
 ### Using skills.sh (Recommended)
 
 ```bash
-# Install the skill
+# Install skills
 npx skills add louiscavalcante/skills --skill autonomous-tests
+npx skills add louiscavalcante/skills --skill autonomous-fixes
 
 # Run the setup script to configure required settings
 bash ~/.claude/skills/louiscavalcante-skills/autonomous-tests/scripts/setup-hook.sh
+# Or for autonomous-fixes (also configures AskUserQuestion hook):
+bash ~/.claude/skills/louiscavalcante-skills/autonomous-fixes/scripts/setup-hook.sh
 ```
 
 ### Manual Installation

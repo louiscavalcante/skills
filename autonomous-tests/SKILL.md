@@ -91,6 +91,7 @@ Schema reference: `references/config-schema.json`.
 
 1. Read `.claude/autonomous-tests.json`
 2. **Validate config version**: check that `version` equals `4` and that the required fields (`project`, `database`, `testing`) exist. If `version` is `3`, perform **v3→v4 migration**: add an empty `capabilities` section (with `lastScanned: null`), bump `version` to `4`, inform the user: "Config migrated from v3 to v4. Capabilities will be scanned on this run." Then continue with the capabilities scan in Step 1 above. If version is less than `3` or required fields are missing, warn the user and re-run the first-run setup below instead.
+   **Ensure `documentation.fixResults`**: if the `documentation` section exists but `fixResults` is missing, add `"fixResults": "docs/_autonomous/fix-results"` as the default path. This enables the autonomous-fixes loop.
 3. **Verify config trust**: compute a SHA-256 hash of the config content (excluding the `_configHash`, `lastRun`, and `capabilities` fields) by running: `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"`. Then check if this hash exists in the **trust store** at `~/.claude/trusted-configs/` (the trust file is named after a hash of the project root: `python3 -c "import hashlib,os;print(hashlib.sha256(os.path.realpath('.').encode()).hexdigest()[:16])"` + `.sha256`). If the trust file is missing or its content doesn't match the computed hash, the config has not been approved by this user — **show the config to the user for confirmation, but redact all values in `userContext.testCredentials`** — display only the role names (keys) with values replaced by `"********"`. Never output raw credential values, env var references, or descriptions from this field. This prevents accidental exposure even if raw secrets were stored in the config. If confirmed, write the new hash to the trust store file (`mkdir -p ~/.claude/trusted-configs/` first). This prevents a malicious config committed to a repo from bypassing approval, since the trust store lives outside the repo in the user's home directory.
 4. Re-scan for new services and update config if needed
 5. Get current UTC time by running `date -u +"%Y-%m-%dT%H:%M:%SZ"` in Bash, then update `lastRun` with that exact value (never guess the time)
@@ -109,9 +110,10 @@ Schema reference: `references/config-schema.json`.
 5. **User Context Questionnaire** — present all questions at once, accept partial answers:
    - Any known flaky areas or intermittent failures?
    - Test user credentials to use (reference env var names or role names, never raw values)?
+   - For each credential: is it **token-based** (API key, JWT — stateless, parallel-safe) or **session-based** (cookie, login — stateful, sequential-only)? Default: session.
    - Any specific testing priorities or focus areas?
    - Any additional notes for the test runner?
-   Store answers in the `userContext` section of the config.
+   Store answers in the `userContext` section of the config. Store credential type answers in `userContext.credentialType` (e.g., `{"admin": "token", "member": "session"}`).
 6. **Propose config** → STOP and wait for user to confirm → write config
 7. **Stamp config trust**: after writing, compute the config hash with `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"` and write the result to the trust store at `~/.claude/trusted-configs/{project-hash}.sha256` (create the directory if needed). This marks the config as user-approved in a location outside the repo that cannot be forged by a committed file.
 8. If project CLAUDE.md < 140 lines and lacks startup instructions, append max 10 lines.
@@ -150,6 +152,8 @@ All identification is fully autonomous — derive everything from the code diff 
 
    Feed extracted findings as a "Prior Test History" section in the Feature Context Document.
 
+   **c. Fix completion scan**: Scan pending-fixes docs for `### Resolution` blocks. Items with `Status: RESOLVED` and `Verification: PASS` become **regression targets** — add them to the test plan for re-verification. Scan the `documentation.fixResults` directory for documents with `Ready for Re-test: YES` — these are **priority re-test targets** from recent fix cycles and should be tested first.
+
 6. Produce a **Feature Context Document** (kept in memory, not written to disk) summarizing: all features touched, all endpoints, all DB collections/tables affected, all external services involved, all edge cases identified from reading the code (error handlers, validation branches, race conditions, retry logic), prior test history from `_autonomous/` scans, file reference content (if provided), and available capabilities from config. This document is cascaded to every agent in Phase 5.
 
 ## Phase 4 — Test Plan (Plan Mode)
@@ -175,7 +179,16 @@ Then design test suites covering **all** of the following categories:
 4. **Error handling** — trigger every error branch visible in the diff (network failures, invalid state transitions, auth failures, permission denials)
 5. **Unexpected database changes** — verify no orphaned records, no missing references, no unintended field mutations, no index-less slow queries on new fields
 6. **Race conditions & timing** — concurrent writes to same resource, out-of-order webhook delivery, expired tokens mid-flow
-7. **Security** — auth bypass attempts, injection inputs, privilege escalation, data leakage between users
+7. **Security** — comprehensive attack surface analysis covering:
+   - *Injection attacks*: SQL, NoSQL, command injection, LDAP injection, XPath injection, template injection (SSTI), header injection, log injection
+   - *Cross-site attacks*: XSS (stored, reflected, DOM-based), CSRF, clickjacking
+   - *Authentication/Authorization*: auth bypass, broken access control, privilege escalation, insecure session management, missing MFA verification, JWT manipulation (alg:none, key confusion)
+   - *Data exposure*: sensitive data in responses (see API Response Security above), verbose error messages, stack traces in production-like responses, internal metadata leakage, information disclosure via timing attacks
+   - *Input handling as attack vectors* — treat ALL user-controlled inputs as potential attack surfaces: file uploads (abnormal sizes, malformed content, zip bombs, polyglot files, path traversal in filenames, content-type mismatch), API payloads (oversized payloads, deeply nested objects, type confusion, prototype pollution), query parameters (injection, parameter pollution, encoding bypass), headers (host header injection, SSRF via forwarded headers), request volume (excessive requests/rate limiting, resource exhaustion, ReDoS patterns)
+   - *Infrastructure*: SSRF, path traversal, insecure deserialization, components with known vulnerabilities, security misconfiguration, insufficient logging/monitoring
+   - *Compliance*: data minimization violations, unnecessary PII collection, missing consent verification, retention policy violations
+
+   All security findings go into the `### Vulnerabilities` subsection of `## Issues Found` in test-results (not mixed into `### Requires Fix`). Each vulnerability entry includes: (1) clear risk explanation, (2) realistic exploitation scenario, (3) regulatory/operational impact, (4) recommended mitigation strategy, (5) priority ranking: data leaks > credential exposure > privilege escalation > DoS risks > compliance violations
 8. **Edge cases from code reading** — every `if/else`, `try/catch`, guard clause, and fallback in the changed code should have at least one test targeting it
 9. **Regression** — existing unit tests if configured, plus re-verify any previously broken flows
 
@@ -185,7 +198,7 @@ Each suite needs: name, objective, pre-conditions, steps with expected outcomes,
 
 Use `TeamCreate` to create a test team. Spawn `general-purpose` Agents as teammates — one per approved suite. **Always use `model: "opus"` when spawning agents** (Opus 4.6 has adaptive reasoning/thinking built-in — no budget to configure, it thinks as deeply as needed automatically). Coordinate via `TaskCreate`/`TaskUpdate` and `SendMessage`.
 
-**Credential sharing — CRITICAL**: Assign each agent a **distinct test credential** from `userContext.testCredentials` to prevent session conflicts (e.g., one agent logging in invalidates another's token). If only one credential exists, run agents **sequentially** — never in parallel with shared auth. Include only the **role name** (key from `testCredentials`) in each agent's task description — never the credential value or env var reference. Each agent must resolve its assigned credential by reading the config file or environment at runtime.
+**Credential sharing — CRITICAL**: Assign each agent a **distinct test credential** from `userContext.testCredentials` to prevent session conflicts (e.g., one agent logging in invalidates another's token). Check `userContext.credentialType` for each role — `"token"` means stateless (API key, JWT) and is parallel-safe even with a single credential; `"session"` (or absent — the default) means stateful (cookie, login session) and requires sequential execution if shared. If only one credential exists **and** its type is `"session"` (or unset), run agents **sequentially** — never in parallel with shared session-based auth. If only one credential exists but its type is `"token"`, agents may run in **parallel** since token-based auth is stateless and concurrent use does not cause conflicts. Include only the **role name** (key from `testCredentials`) in each agent's task description — never the credential value or env var reference. Each agent must resolve its assigned credential by reading the config file or environment at runtime.
 
 **Cascading context — CRITICAL**: Every agent MUST receive the full **Feature Context Document** from Phase 3 in its task description. This includes: all features touched, all endpoints, all DB collections affected, all external services involved, all identified edge cases, prior test history, and available capabilities. Agents need this complete picture to understand cross-feature side-effects (e.g., testing endpoint A may break endpoint B's state).
 
@@ -206,10 +219,36 @@ Use `TeamCreate` to create a test team. Spawn `general-purpose` Agents as teamma
 - Auth tokens or sessions behaving unexpectedly (expired mid-flow, leaked between users)
 - Any response field or status code that differs from what the code intends
 
+**API Response Security Inspection**: Every agent must deeply analyze ALL API responses exercised during test execution and detect:
+
+*Exposed Identifiers*:
+- Internal database IDs (MongoDB ObjectIDs, auto-increment integers, UUIDs that reveal creation order)
+- Sequential or guessable IDs (enumeration attacks)
+- Sensitive resource references (file paths, internal URLs, infrastructure details)
+
+*Leaked Credentials/Secrets*:
+- API keys in response bodies or headers
+- Tokens (JWT, OAuth, session tokens) exposed beyond intended scope
+- Passwords or hashed credentials in responses
+- Environment variables or config values leaked in error messages
+- Cloud/infrastructure secrets (AWS keys, connection strings)
+
+*Exposed Personal Data* (multi-regulation compliance):
+- PII: names, emails, phone numbers, addresses, government IDs (CPF/SSN/etc.), dates of birth
+- Sensitive personal data: health records (HIPAA), financial data, biometric data, racial/ethnic origin, political opinions, religious beliefs, sexual orientation, genetic data
+- Data subject to privacy regulations:
+  - **LGPD** (Brazil): all personal data of Brazilian data subjects
+  - **GDPR** (EU): personal data of EU residents
+  - **CCPA/CPRA** (California): personal information of California consumers
+  - **HIPAA** (US): protected health information
+  - Other applicable regional regulations
+
+Each finding must be categorized by: **Severity**, **Regulatory impact** (which laws apply), **Exploitability** (how easily an attacker can leverage it), **Compliance risk** (legal/financial exposure). All API response security findings go into the `### API Response Security` subsection of `## Issues Found` in test-results documentation.
+
 **Execution flow**:
 1. Create tasks for each suite via `TaskCreate` — include: env details from config, exact test steps, verification queries, teardown instructions, the full Feature Context Document, and the **role name** of the assigned credential (agents resolve the actual value at runtime from config or env vars — never embed credential values in task descriptions)
 2. Assign tasks to agents via `TaskUpdate` with `owner`
-3. If credentials allow (distinct per agent), agents may run in parallel; otherwise run **sequentially** — wait for each to complete before starting the next
+3. If credentials allow (distinct per agent, or single token-based credential), agents may run in parallel; otherwise spawn a **single `general-purpose` agent with `model: "opus"`** and run suites **sequentially** through it — never execute test suites in the main conversation
 4. Report PASS/FAIL after each suite completes, including any anomalies detected
 5. After all suites complete, shut down teammates via `SendMessage` with `type: "shutdown_request"`
 

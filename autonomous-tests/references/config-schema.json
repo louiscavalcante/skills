@@ -55,12 +55,16 @@
     "testResults": "docs/_autonomous/test-results",
     "pendingGuidedTests": "docs/_autonomous/pending-guided-tests",
     "pendingFixes": "docs/_autonomous/pending-fixes",
-    "pendingAutonomousTests": "docs/_autonomous/pending-autonomous-tests"
+    "pendingAutonomousTests": "docs/_autonomous/pending-autonomous-tests",
+    "fixResults": "docs/_autonomous/fix-results"
   },
   "userContext": {
     "flakyAreas": ["description | null"],
     "testCredentials": {
       "role-name": "MUST be an env var name like $TEST_USER_PASSWORD — raw secret values are forbidden and will be redacted"
+    },
+    "credentialType": {
+      "role-name": "token | session — token = stateless (API key, JWT), parallel-safe; session = stateful (cookie, login session), sequential-only. Default: session"
     },
     "testingPriorities": ["description | null"],
     "notes": "free-form user notes | null"

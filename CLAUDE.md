@@ -19,6 +19,11 @@ skills/
 │   ├── SKILL.md           ← Claude-facing skill definition
 │   ├── references/        ← Config schema, templates
 │   └── scripts/           ← Setup scripts
+├── autonomous-fixes/      ← Skill: autonomous fix runner (test-fix loop)
+│   ├── README.md          ← Human-facing docs
+│   ├── SKILL.md           ← Claude-facing skill definition
+│   ├── references/        ← Finding parser, templates
+│   └── scripts/           ← Setup scripts
 ├── hooks/                 ← Discoverable hook configurations
 │   └── hooks.json
 └── tests/                 ← Skill-triggering tests

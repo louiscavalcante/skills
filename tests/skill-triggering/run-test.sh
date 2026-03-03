@@ -3,22 +3,33 @@
 #
 # Usage: bash run-test.sh <prompt-file>
 #
-# Sends the prompt to Claude Code with the autonomous-tests skill loaded,
+# Sends the prompt to Claude Code with the appropriate skill loaded,
 # then checks if the skill was triggered in the output.
+#
+# Skill detection: prompt filenames containing "fix" target autonomous-fixes,
+# all others target autonomous-tests.
 
 set -euo pipefail
 
 PROMPT_FILE="${1:?Usage: bash run-test.sh <prompt-file>}"
-SKILL_DIR="$(cd "$(dirname "$0")/../.." && pwd)/autonomous-tests"
-EXPECTED_SKILL="autonomous-tests"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+PROMPT_NAME="$(basename "$PROMPT_FILE" .txt)"
 
 if [[ ! -f "$PROMPT_FILE" ]]; then
   echo "FAIL: Prompt file not found: $PROMPT_FILE"
   exit 1
 fi
 
+# Determine which skill to test based on prompt filename
+if [[ "$PROMPT_NAME" == *fix* ]]; then
+  SKILL_DIR="$REPO_ROOT/autonomous-fixes"
+  EXPECTED_SKILL="autonomous-fixes"
+else
+  SKILL_DIR="$REPO_ROOT/autonomous-tests"
+  EXPECTED_SKILL="autonomous-tests"
+fi
+
 PROMPT="$(cat "$PROMPT_FILE")"
-PROMPT_NAME="$(basename "$PROMPT_FILE" .txt)"
 
 # Run Claude Code in print mode with the skill loaded, capture output
 OUTPUT=$(claude --skill-dir "$SKILL_DIR" --print "$PROMPT" 2>&1) || true
