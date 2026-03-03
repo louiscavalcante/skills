@@ -26,7 +26,7 @@ Analyzes your code changes (and optional doc file references), auto-detects avai
 
 - **Analyzes git diffs** to identify features, endpoints, and database operations touched
 - **Accepts `.md` doc references** as additional test context via `file:<path>`
-- **Auto-detects capabilities** — Docker MCPs, agent-browser, Playwright, Stripe CLI — and caches them
+- **Auto-detects capabilities** — Docker MCPs, agent-browser, Playwright, external service CLIs — and caches them
 - **Learns from past runs** by scanning `_autonomous/` history for related test results and known issues
 - **Traces dependency graphs** across files and related projects to understand blast radius
 - **Generates a test plan** covering happy paths, edge cases, race conditions, security, and more — with mandatory human approval before execution
@@ -167,7 +167,7 @@ On first run, the skill creates `.claude/autonomous-tests.json` in your project 
 | `testing` | Unit test command, test data prefix, context files |
 | `documentation` | Output paths for each report type |
 | `userContext` | Flaky areas, test credentials, priorities, notes |
-| `capabilities` | Auto-detected testing tools (Docker MCPs, agent-browser, Playwright, Stripe CLI) |
+| `capabilities` | Auto-detected testing tools (Docker MCPs, agent-browser, Playwright, external service CLIs) |
 
 See [`references/config-schema.json`](references/config-schema.json) for the full schema.
 
@@ -221,7 +221,7 @@ The skill enforces explicit operational bounds to constrain resource usage and p
 | Credential handling | Env var references only — raw values forbidden, redacted on display |
 | MCP activation | Only `safe: true` MCPs — `safe: false` are never activated |
 | Agent lifecycle | One suite per agent — spawned, executes, shut down |
-| Stripe CLI | Sandbox only — blocked on live keys, per-run confirmation, operation allowlist |
+| External service CLIs | Sandbox only — blocked on production keys, per-run confirmation, catalog-defined allowlist |
 | System commands | Explicit allowlist — only read-only/idempotent commands beyond user config |
 | External downloads | Docker images from user's compose files only — no arbitrary downloads |
 | Data access | `settings.json` and `.env` for safety checks only — values never logged or output |
@@ -236,7 +236,7 @@ The skill auto-detects available testing tools and caches results in the `capabi
 | Docker MCPs | `mcp-find` search | Agents `mcp-add` safe MCPs at runtime for relevant tests | Only `safe: true` MCPs are activated |
 | agent-browser | `which agent-browser` | UI testing, browser-based verification | Read-only by default |
 | Playwright | `which playwright` / `npx playwright --version` | Frontend component and integration tests | Local only |
-| Stripe CLI | `which stripe` + `stripe config --list` | Webhook forwarding, payment testing | **Blocked if live keys detected** |
+| External Service CLIs | Catalog-based detection + CLAUDE.md scanning | Per catalog `allowedOperations` | **Blocked if production keys detected** |
 
 Capabilities are cached with a `lastScanned` timestamp and re-scanned when older than `rescanThresholdDays` (default: 7). Use the `rescan` argument to force a fresh scan:
 
@@ -315,12 +315,12 @@ Phase 8: Cleanup    ← Remove test data, verify clean state
 Phase 9: Advisory   ← Remind user to /clear before next skill
 ```
 
-- **Phase 0** loads your config or walks you through first-run setup. Scans for available capabilities (Docker MCPs, agent-browser, Playwright, Stripe CLI) and caches results. Returning runs validate the config, check trust, and refresh stale capabilities.
+- **Phase 0** loads your config or walks you through first-run setup. Scans for available capabilities (Docker MCPs, agent-browser, Playwright, external service CLIs) and caches results. Returning runs validate the config, check trust, and refresh stale capabilities.
 - **Phase 1** scans `.env` files for production indicators (`sk_live_`, `NODE_ENV=production`, etc.) and aborts if any are found.
 - **Phase 2** health-checks each service and starts any that are down, including related projects.
 - **Phase 3** reads every changed file, processes `file:<path>` references if provided, builds a feature map (endpoints, DB ops, auth flows), traces the full dependency graph across project boundaries, and scans `_autonomous/` folders for prior test history related to current changes.
 - **Phase 4** enters plan mode with test suites covering happy paths, validation, idempotency, error handling, race conditions, security, and edge cases. You approve before anything executes.
-- **Phase 5** spawns one Agent Team member per suite. Each agent gets the full feature context (including prior history and available capabilities) and a distinct test credential. Agents leverage detected capabilities — agent-browser for UI tests, Playwright for frontend tests, safe Docker MCPs, and Stripe CLI when not blocked.
+- **Phase 5** spawns one Agent Team member per suite. Each agent gets the full feature context (including prior history and available capabilities) and a distinct test credential. Agents leverage detected capabilities — agent-browser for UI tests, Playwright for frontend tests, safe Docker MCPs, and external service CLIs when not blocked.
 - **Phase 6** auto-fixes runtime issues (env vars, containers) up to 3 times. Code bugs are documented and shown to you.
 - **Phase 7** generates timestamped markdown reports from templates.
 - **Phase 8** removes test data by prefix, verifies cleanup with DB queries, and logs every action.
@@ -338,7 +338,7 @@ Phase 9: Advisory   ← Remind user to /clear before next skill
 | Services won't start | Docker not running | Check `docker info` |
 | Tests fail with auth errors | Shared credentials between agents | Add distinct test users per agent in config |
 | Trust verification fails | Config modified externally | Re-approve when prompted |
-| "Stripe CLI blocked" warning | Live keys detected in Stripe config | Switch to test keys: `stripe config --set test_mode_api_key sk_test_...` |
+| "External service CLI blocked" | Production keys detected | Switch to sandbox/test keys for the affected service |
 | Capabilities seem stale | Cache older than threshold | Run `/autonomous-tests rescan` to force re-scan |
 | "File reference not found" | `file:<path>` points to missing file | Check path is relative to project root and file exists |
 

@@ -1,0 +1,79 @@
+[
+  {
+    "name": "Stripe",
+    "type": "payment",
+    "cliTool": "stripe",
+    "detectionCommand": "which stripe",
+    "modeDetection": {
+      "command": "stripe config --list 2>/dev/null",
+      "patterns": {
+        "production": ["sk_live_", "pk_live_", "rk_live_"],
+        "sandbox": ["sk_test_", "pk_test_", "rk_test_"]
+      }
+    },
+    "productionIndicators": ["sk_live_", "pk_live_", "rk_live_", "STRIPE_LIVE_"],
+    "sandboxIndicators": ["sk_test_", "pk_test_", "rk_test_", "STRIPE_TEST_"],
+    "allowedOperations": [
+      { "command": "stripe listen", "purpose": "Webhook forwarding to local endpoint" },
+      { "command": "stripe trigger", "purpose": "Event simulation in sandbox" },
+      { "command": "stripe paymentintents", "scope": "sandbox" }
+    ],
+    "prohibitedFlags": ["--live"],
+    "prohibitedOperations": ["account", "transfers create", "payouts create"],
+    "userPromptTemplate": "This run includes {name} CLI operations (webhook forwarding, event simulation, sandbox payment intents) in your **{mode}** environment. Proceed?",
+    "blockedWarning": "{name} CLI is configured with production keys. Autonomous tests will NOT use {name} CLI to prevent production side-effects. Switch to test/sandbox keys to enable {name} testing.",
+    "claudeMdKeywords": ["stripe", "stripe listen", "stripe trigger", "stripe paymentintents", "stripe cli", "sk_test_", "pk_test_", "STRIPE_SECRET_KEY", "STRIPE_PUBLISHABLE_KEY"]
+  },
+  {
+    "name": "AWS",
+    "type": "cloud",
+    "cliTool": "aws",
+    "detectionCommand": "which aws",
+    "modeDetection": {
+      "command": "aws configure get region 2>/dev/null && aws sts get-caller-identity --query Account --output text 2>/dev/null",
+      "patterns": {
+        "production": ["prod", "production"],
+        "sandbox": ["dev", "staging", "test", "sandbox", "localstack"]
+      }
+    },
+    "productionIndicators": ["AKIAIOSFODNN7PROD", "AWS_PROD_", "arn:aws:.*:prod"],
+    "sandboxIndicators": ["LOCALSTACK_", "AWS_ENDPOINT_URL=http://localhost", "AWS_ACCESS_KEY_ID=test"],
+    "allowedOperations": [
+      { "command": "aws s3 ls", "purpose": "List S3 buckets" },
+      { "command": "aws s3 cp", "scope": "sandbox buckets only" },
+      { "command": "aws sqs", "scope": "sandbox queues only" },
+      { "command": "aws sns", "scope": "sandbox topics only" },
+      { "command": "aws dynamodb", "scope": "local/sandbox tables only" }
+    ],
+    "prohibitedFlags": ["--endpoint-url https://*.amazonaws.com"],
+    "prohibitedOperations": ["iam", "organizations", "ec2 terminate-instances", "rds delete-db-instance", "s3 rb"],
+    "userPromptTemplate": "This run includes {name} CLI operations ({operationSummary}) in your **{mode}** environment. Proceed?",
+    "blockedWarning": "{name} CLI is configured with production credentials. Autonomous tests will NOT use {name} CLI to prevent production side-effects. Switch to sandbox/localstack credentials to enable {name} testing.",
+    "claudeMdKeywords": ["aws", "aws cli", "localstack", "s3", "sqs", "sns", "dynamodb", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_ENDPOINT_URL"]
+  },
+  {
+    "name": "Firebase",
+    "type": "cloud",
+    "cliTool": "firebase",
+    "detectionCommand": "which firebase",
+    "modeDetection": {
+      "command": "firebase use 2>/dev/null",
+      "patterns": {
+        "production": ["production", "-prod", "-live"],
+        "sandbox": ["emulator", "demo-", "-dev", "-staging", "-test", "localhost"]
+      }
+    },
+    "productionIndicators": ["FIREBASE_PROD_", "firebaseapp.com"],
+    "sandboxIndicators": ["FIREBASE_EMULATOR_", "FIRESTORE_EMULATOR_HOST", "localhost:8080", "localhost:9099", "demo-"],
+    "allowedOperations": [
+      { "command": "firebase emulators:start", "purpose": "Start local emulators" },
+      { "command": "firebase emulators:exec", "purpose": "Run commands against emulators" },
+      { "command": "firebase functions:shell", "scope": "emulator only" }
+    ],
+    "prohibitedFlags": ["--force", "--non-interactive"],
+    "prohibitedOperations": ["deploy", "hosting:disable", "firestore:delete --all-collections", "auth:import", "auth:export"],
+    "userPromptTemplate": "This run includes {name} CLI operations ({operationSummary}) in your **{mode}** environment. Proceed?",
+    "blockedWarning": "{name} CLI is pointing to a production project. Autonomous tests will NOT use {name} CLI to prevent production side-effects. Switch to emulators or a dev project to enable {name} testing.",
+    "claudeMdKeywords": ["firebase", "firebase emulators", "firestore", "firebase functions", "FIREBASE_PROJECT_ID", "FIRESTORE_EMULATOR_HOST", "FIREBASE_AUTH_EMULATOR_HOST"]
+  }
+]

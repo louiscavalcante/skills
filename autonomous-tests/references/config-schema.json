@@ -1,6 +1,6 @@
 {
-  "$schema": "autonomous-tests-config-v4",
-  "version": 4,
+  "$schema": "autonomous-tests-config-v5",
+  "version": 5,
   "initialized": "ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ)",
   "lastRun": "ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ)",
   "project": {
@@ -44,10 +44,23 @@
   "externalServices": [
     {
       "name": "service-name",
-      "type": "payment | storage | email | queue | cache | api",
+      "type": "payment | storage | email | queue | cache | api | cloud",
+      "source": "auto-detected | user-configured | claude-md",
       "sandboxCheck": "command to verify sandbox mode | null",
-      "webhookListener": "stripe listen --forward-to localhost:8000/webhooks/stripe | null",
-      "productionIndicators": ["sk_live_", "LIVE_SECRET"]
+      "webhookListener": "command to forward webhooks to local endpoint | null",
+      "productionIndicators": ["LIVE_SECRET"],
+      "sandboxIndicators": ["TEST_SECRET"],
+      "cli": {
+        "tool": "cli-binary-name",
+        "available": false,
+        "mode": "sandbox | test | live | unknown",
+        "blocked": false,
+        "allowedOperations": [
+          { "command": "cli-tool subcommand", "purpose": "description", "scope": "sandbox" }
+        ],
+        "prohibitedFlags": ["--live"],
+        "approvedThisRun": false
+      }
     }
   ],
   "testing": {
@@ -85,11 +98,6 @@
     "frontendTesting": {
       "agentBrowser": false,
       "playwright": false
-    },
-    "stripeCli": {
-      "available": false,
-      "mode": "sandbox | test | live | unknown",
-      "blocked": false
     },
     "lastScanned": "ISO-8601 UTC",
     "rescanThresholdDays": 7

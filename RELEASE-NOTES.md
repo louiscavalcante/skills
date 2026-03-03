@@ -1,5 +1,22 @@
 # Release Notes
 
+## v1.3.0 (2026-03-03)
+
+### Added
+- **External services catalog** (`references/external-services-catalog.json`): Maps known services to CLI tools, production indicators, sandbox patterns, and allowed operations. Add new services to the catalog — no SKILL.md changes needed.
+- **CLAUDE.md scanning for external services** (Phase 0): Scans project, global, and local CLAUDE.md files for service keywords from the catalog. Auto-detects relevant CLIs.
+- **Generic external service CLI gating** (Phase 5): Per-service user confirmation using catalog-defined prompt templates.
+- **Config schema v5**: `externalServices[].cli` sub-object replaces `capabilities.stripeCli`. Includes `source`, `allowedOperations`, `prohibitedFlags`, `approvedThisRun`.
+
+### Changed
+- **Zero service-specific references in SKILL.md**: All Stripe CLI references removed from both skill instruction files. Service-specific knowledge lives exclusively in the catalog.
+- **Phase 1 production safety**: Production indicators loaded dynamically from `externalServices[].productionIndicators`.
+- **Dynamic Context**: `stripe-cli:Y/N` → `ext-clis:N` (count of available CLIs).
+- **v4→v5 auto-migration**: Existing configs with `capabilities.stripeCli` migrated automatically.
+
+### Fixed
+- **W009 scanner finding eliminated**: No payment-gateway CLI references remain in instruction files.
+
 ## v1.2.2 (2026-03-03)
 
 ### Added

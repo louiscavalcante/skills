@@ -30,7 +30,7 @@ hooks:
 - Docker: !`docker compose ps 2>/dev/null | head -10 || echo "No docker-compose found"`
 - Config: !`test -f .claude/autonomous-tests.json && echo "YES" || echo "NO -- first run"`
 - Agent Teams: !`python3 -c "import json;s=json.load(open('$HOME/.claude/settings.json'));print('ENABLED' if s.get('env',{}).get('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS')=='1' else 'DISABLED')" 2>/dev/null || echo "DISABLED -- settings not found"`
-- Capabilities: !`python3 -c "import json;c=json.load(open('.claude/autonomous-tests.json')).get('capabilities',{});mcps=len(c.get('dockerMcps',[]));ab='Y' if c.get('frontendTesting',{}).get('agentBrowser') else 'N';pw='Y' if c.get('frontendTesting',{}).get('playwright') else 'N';sc='Y' if c.get('stripeCli',{}).get('available') else 'N';print(f'MCPs:{mcps} agent-browser:{ab} playwright:{pw} stripe-cli:{sc} scanned:{c.get(\"lastScanned\",\"never\")}')" 2>/dev/null || echo "NOT SCANNED"`
+- Capabilities: !`python3 -c "import json;c=json.load(open('.claude/autonomous-tests.json'));caps=c.get('capabilities',{});mcps=len(caps.get('dockerMcps',[]));ab='Y' if caps.get('frontendTesting',{}).get('agentBrowser') else 'N';pw='Y' if caps.get('frontendTesting',{}).get('playwright') else 'N';ec=sum(1 for s in c.get('externalServices',[]) if s.get('cli',{}).get('available'));print(f'MCPs:{mcps} agent-browser:{ab} playwright:{pw} ext-clis:{ec} scanned:{caps.get(\"lastScanned\",\"never\")}')" 2>/dev/null || echo "NOT SCANNED"`
 
 ## Role
 
@@ -79,11 +79,16 @@ If none of the triggers are met, skip this step and use cached capabilities.
 
 When triggered, run three checks in parallel:
 
-1. **Docker MCP Discovery**: Use `mcp-find` to search for available MCPs (e.g., query "stripe", "database", "testing"). For each result, record `name`, `description`, infer `mode` from context (sandbox/staging/local/unknown), and set `safe: true` only for well-known sandbox MCPs. Agents can later `mcp-add` safe MCPs at runtime. If `mcp-find` is unavailable or errors, set `dockerMcps` to an empty array and continue.
+1. **Docker MCP Discovery**: Use `mcp-find` to search for available MCPs using service names from the external services catalog and generic queries (e.g., "database", "testing"). For each result, record `name`, `description`, infer `mode` from context (sandbox/staging/local/unknown), and set `safe: true` only for well-known sandbox MCPs. Agents can later `mcp-add` safe MCPs at runtime. If `mcp-find` is unavailable or errors, set `dockerMcps` to an empty array and continue.
 
 2. **Frontend Testing**: Run `which agent-browser` to check for agent-browser availability. Check for playwright via `which playwright` or `npx playwright --version`. Set booleans in `frontendTesting.agentBrowser` and `frontendTesting.playwright`.
 
-3. **Stripe CLI**: Run `which stripe`. If available, run `stripe config --list 2>/dev/null` to detect mode. If output contains `sk_live_` keys → set `mode: "live"`, `blocked: true` → **STOP and warn user**: "Stripe CLI is configured with live keys. Autonomous tests will NOT use Stripe CLI to prevent production charges. Switch to test keys or unset live keys to enable Stripe testing." If `sk_test_` found → `mode: "sandbox"`, `blocked: false`. Otherwise `mode: "unknown"`, `blocked: false`. If `which stripe` fails, set `available: false`.
+3. **External Service CLI Detection**: Load `references/external-services-catalog.json`. Scan CLAUDE.md files (project, global at `~/.claude/CLAUDE.md`, and local at `.claude/CLAUDE.md`) for each catalog entry's `claudeMdKeywords`. For each matched service:
+   - Run the catalog entry's `detectionCommand` (e.g., `which <cliTool>`). If unavailable, set `cli.available: false` and skip.
+   - If available, run the `modeDetection.command`. Pattern-match output against `modeDetection.patterns.production` → set `cli.mode: "live"`, `cli.blocked: true`. Match against `modeDetection.patterns.sandbox` → set `cli.mode: "sandbox"`, `cli.blocked: false`. No match → `cli.mode: "unknown"`, `cli.blocked: false`.
+   - If blocked, warn using the catalog's `blockedWarning` template (resolve `{name}` placeholder).
+   - Populate `cli.allowedOperations` and `cli.prohibitedFlags` from the catalog entry.
+   - Merge into the matching `externalServices[]` entry (create one if not found, with `source: "claude-md"`).
 
 Write results to `capabilities` in config with `lastScanned` set to current UTC time (obtained via `date -u`).
 
@@ -94,7 +99,7 @@ Schema reference: `references/config-schema.json`.
 ### If output is `CONFIG_EXISTS` (returning run):
 
 1. Read `.claude/autonomous-tests.json`
-2. **Validate config version**: check that `version` equals `4` and that the required fields (`project`, `database`, `testing`) exist. If `version` is `3`, perform **v3→v4 migration**: add an empty `capabilities` section (with `lastScanned: null`), bump `version` to `4`, inform the user: "Config migrated from v3 to v4. Capabilities will be scanned on this run." Then continue with the capabilities scan in Step 1 above. If version is less than `3` or required fields are missing, warn the user and re-run the first-run setup below instead.
+2. **Validate config version**: check that `version` equals `5` and that the required fields (`project`, `database`, `testing`) exist. If `version` is `4`, perform **v4→v5 migration**: check for any legacy service-specific CLI fields under `capabilities` (e.g., fields matching `*Cli` pattern) → for each, find or create a matching `externalServices[]` entry → populate its `cli` sub-object (`tool`, `available`, `mode`, `blocked` from the legacy values, `allowedOperations` and `prohibitedFlags` from the catalog) → set `source: "auto-detected"` → remove the legacy field from `capabilities` → bump `version` to `5`. Inform the user: "Config migrated from v4 to v5. External service CLIs are now managed via `externalServices[].cli`." If `version` is `3`, perform **v3→v4→v5 migration**: first add an empty `capabilities` section (with `lastScanned: null`), then apply the v4→v5 migration above. If version is less than `3` or required fields are missing, warn the user and re-run the first-run setup below instead.
    **Ensure `database.seedStrategy`**: if the `database` section exists but `seedStrategy` is missing, default to `"autonomous"` and inform the user: "Seed strategy defaulted to `autonomous` — agents will create their own test data per suite. Run with `seedStrategy: \"command\"` in config to use a global seed command instead."
    **Ensure `documentation.fixResults`**: if the `documentation` section exists but `fixResults` is missing, add `"fixResults": "docs/_autonomous/fix-results"` as the default path. This enables the autonomous-fixes loop.
    **Ensure `userContext.credentialType`**: if `userContext.testCredentials` exists but `userContext.credentialType` is missing or empty, prompt the user for each credential role: "Is `{role-name}` **token-based** (API key, JWT — stateless, parallel-safe) or **session-based** (cookie, login — stateful, sequential-only)?" Save answers to `userContext.credentialType`. This determines whether agents can run in parallel with a single credential. Only prompt once — skip if `credentialType` already has entries for all credential roles.
@@ -135,7 +140,7 @@ Schema reference: `references/config-schema.json`.
 
 ## Phase 1 — Safety
 
-**ABORT if any production indicators found** in `.env` files: `sk_live_`, `pk_live_`, `*LIVE*SECRET*`, `NODE_ENV=production`, production DB endpoints (RDS, Atlas without dev/stg/test), non-local API URLs. Show variable NAME only, never the value. Run `sandboxCheck` commands from config. Verify Docker is local.
+**ABORT if any production indicators found** in `.env` files: any `productionIndicators` from `externalServices[]` entries, `*LIVE*SECRET*`, `NODE_ENV=production`, production DB endpoints (RDS, Atlas without dev/stg/test), non-local API URLs. Show variable NAME only, never the value. Run `sandboxCheck` commands from config. Verify Docker is local.
 
 ## Phase 2 — Service Startup
 
@@ -228,10 +233,10 @@ Use `TeamCreate` to create a test team. Spawn `general-purpose` Agents as teamma
 3. **Direct HTTP/API (LAST RESORT)** if both are unavailable — attempt via curl/fetch, mark remaining untestable parts as "guided"
 
 Skipping a browser test without attempting these tools is **PROHIBITED**.
-- Use `mcp-add` to activate Docker MCPs from `dockerMcps` that are marked `safe: true` and relevant to the test needs (e.g., a Stripe sandbox MCP for payment tests)
-- **Stripe CLI usage gate**: If `stripeCli.available` is true and `stripeCli.blocked` is false, and the test plan includes Stripe-dependent suites, prompt the user once at the start of Phase 5 via `AskUserQuestion`: "This run includes Stripe CLI operations (webhook forwarding, event simulation, sandbox payment intents) in your **sandbox** environment. Proceed?" If declined, mark Stripe-dependent test steps as "guided" and continue with non-Stripe tests. Once approved, agents may use Stripe CLI for approved suite operations only — no ad-hoc Stripe commands.
+- Use `mcp-add` to activate Docker MCPs from `dockerMcps` that are marked `safe: true` and relevant to the test needs (e.g., a sandbox MCP relevant to the test suite)
+- **External service CLI gate**: For each `externalServices[]` entry where `cli.available` is true and `cli.blocked` is false, and the test plan depends on that service — prompt the user once per service at the start of Phase 5 via `AskUserQuestion`, using the catalog's `userPromptTemplate` (resolve `{name}`, `{mode}`, `{operationSummary}` placeholders). If declined, mark that service's dependent test steps as "guided" and continue with other tests. If approved, set `cli.approvedThisRun: true` — agents may use only `cli.allowedOperations` from the catalog. `cli.prohibitedFlags` are always blocked.
 - **NEVER** activate MCPs where `safe: false` — these may be production or unknown-mode services
-- **NEVER** use Stripe CLI when `stripeCli.blocked` is true — this indicates live keys are configured
+- **NEVER** use external service CLIs when `cli.blocked` is true — this indicates production keys are configured
 
 **Anomaly detection**: Each agent must actively watch for and report:
 - Duplicate records created by repeated API calls
@@ -333,8 +338,8 @@ After all phases complete, display this message prominently:
 - If no unit tests exist → note in report, do not treat as a failure
 - Use UTC timestamps everywhere (docs, config, logs) — always obtain from `date -u`, never guess
 - Never activate Docker MCPs where `safe: false` — these may be production or unknown-mode services
-- Never use Stripe CLI when `stripeCli.blocked` is true — live keys are configured
-- Stripe CLI operations require per-run user confirmation in Phase 5 — limited to `stripe listen` (webhook forwarding), `stripe trigger` (event simulation), and sandbox payment intent operations. The `--live` flag, account modifications, transfers, and payouts are prohibited.
+- External service CLIs are blocked when `cli.blocked` is true for that service — production keys are configured
+- External service CLI operations require per-run user confirmation in Phase 5 — limited to `allowedOperations` defined in the external services catalog. `prohibitedFlags` and `prohibitedOperations` from the catalog are always blocked.
 - Capabilities are auto-detected — never ask the user to manually configure them
 - When reading `_autonomous/` history, read only Summary and Issues Found sections — never read full historical documents
 - Never generate, concatenate, or interpolate shell commands at runtime — only execute commands defined verbatim in the user-approved config
@@ -353,7 +358,7 @@ These bounds constrain resource usage and are enforced throughout execution:
 - **Credential scope**: Env var references only — raw values forbidden in config, redacted on display, excluded from documentation output
 - **MCP scope**: Only MCPs marked `safe: true` can be activated — `safe: false` MCPs are never activated
 - **Agent lifecycle**: Each agent is spawned, executes one suite, and is shut down — no persistent or long-lived agents
-- **Stripe CLI scope**: Limited to `stripe listen`, `stripe trigger`, and sandbox `stripe paymentintents` operations. Per-run user confirmation required (Phase 5). Blocked entirely when `stripeCli.blocked` is true. The `--live` flag, account modifications, transfer creation, and payout operations are prohibited.
+- **External service CLI scope**: Limited to `allowedOperations` from the external services catalog per service. Per-run user confirmation required (Phase 5). Blocked entirely when `cli.blocked` is true for a service. `prohibitedFlags` and `prohibitedOperations` defined per service in the catalog are always blocked.
 - **System command allowlist**: Beyond user-approved config commands, the skill uses only these read-only or idempotent system commands: `which` (capability detection), `docker compose ps` (service status), `git branch`/`git diff`/`git log` (diff analysis), `test -f` (file checks), `date -u` (UTC timestamps), `curl -sf` to localhost URLs from config (health checks), `python3 -c` with `json`/`hashlib` stdlib only (SHA-256 hashing). The setup script (`setup-hook.sh`) modifies `~/.claude/settings.json` once at install time — not during test runs.
 - **External download scope**: Docker images are pulled only by `docker compose up` from the user's own compose files — image names and registries are project-defined, not skill-defined. Playwright browsers are downloaded only if Playwright is present and requires them — the skill checks availability via `npx playwright --version` but does not force installation. No other downloads (URLs, repos, scripts, packages) occur at runtime.
 - **Data access scope**: Files read outside the project root: `~/.claude/settings.json` (read-only, Phase 0 flag checks), `~/.claude/trusted-configs/{hash}.sha256` (read/write, one hash string per project). `.env` files within the project are scanned in Phase 1 for production indicator patterns only — variable values are pattern-matched but never stored, logged, or included in any output.

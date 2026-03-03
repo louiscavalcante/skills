@@ -219,7 +219,7 @@ The skill enforces explicit operational bounds to constrain resource usage and p
 | Docker scope | Local containers only — aborts on production indicators, namespaced compose projects |
 | MCP activation | Only `safe: true` MCPs — `safe: false` are never activated |
 | Agent lifecycle | One suite per agent — start env, execute, teardown, shut down |
-| Stripe CLI | Sandbox only — blocked on live keys, per-run confirmation, operation allowlist |
+| External service CLIs | Sandbox only — blocked on production keys, per-run confirmation, catalog-defined allowlist |
 | System commands | Explicit allowlist — only read-only/idempotent commands beyond user config |
 | External downloads | Docker images from user's compose files only — no arbitrary downloads |
 | Data access | `settings.json` and `.env` for safety checks only — values never logged or output |
