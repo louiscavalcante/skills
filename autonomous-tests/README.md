@@ -58,10 +58,11 @@ Then run the setup script to configure required settings:
 bash ~/.claude/skills/louiscavalcante-skills/autonomous-tests/scripts/setup-hook.sh
 ```
 
-The setup script configures three things in `~/.claude/settings.json`:
+The setup script configures four things in `~/.claude/settings.json`:
 1. **ExitPlanMode hook** — forces plan approval even in `dontAsk` mode
-2. **Agent Teams flag** — enables `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` for parallel execution
-3. **Model** — sets `claude-opus-4-6` as the default model (required for agent team reasoning capabilities)
+2. **AskUserQuestion hook** — forces user prompts even in `dontAsk`/bypass mode
+3. **Agent Teams flag** — enables `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` for parallel execution
+4. **Model** — sets `claude-opus-4-6` as the default model (required for agent team reasoning capabilities)
 
 ### Manual Install
 
@@ -77,17 +78,26 @@ If you prefer not to use [skills.sh](https://skills.sh/):
      "model": "claude-opus-4-6"
    }
    ```
-3. (Optional) Add the global ExitPlanMode hook — add to `~/.claude/settings.json` under `hooks.PreToolUse`:
+3. (Optional) Add the global hooks — add to `~/.claude/settings.json` under `hooks.PreToolUse`:
    ```json
-   {
-     "matcher": "ExitPlanMode",
-     "hooks": [{
-       "type": "command",
-       "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}'"
-     }]
-   }
+   [
+     {
+       "matcher": "ExitPlanMode",
+       "hooks": [{
+         "type": "command",
+         "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}'"
+       }]
+     },
+     {
+       "matcher": "AskUserQuestion",
+       "hooks": [{
+         "type": "command",
+         "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}'"
+       }]
+     }
+   ]
    ```
-   The skill already includes this as a skill-scoped hook, so the global version is optional.
+   The skill already includes these as skill-scoped hooks, so the global version is optional.
 
 ### Verify Installation
 
@@ -152,7 +162,7 @@ On first run, the skill creates `.claude/autonomous-tests.json` in your project 
 |---|---|
 | `project` | Root path, name, topology, services with start/health/log commands |
 | `relatedProjects` | Sibling repos that are part of the same system |
-| `database` | Type, connection command, test DB name |
+| `database` | Type, connection command, test DB name, seed/migration/cleanup commands |
 | `externalServices` | Third-party integrations with sandbox checks and production indicators |
 | `testing` | Unit test command, test data prefix, context files |
 | `documentation` | Output paths for each report type |
@@ -271,6 +281,7 @@ Phase 5: Execute    ← Agent Teams run suites in parallel
 Phase 6: Fix        ← Auto-fix runtime issues, document bugs
 Phase 7: Docs       ← Generate markdown reports
 Phase 8: Cleanup    ← Remove test data, verify clean state
+Phase 9: Advisory   ← Remind user to /clear before next skill
 ```
 
 - **Phase 0** loads your config or walks you through first-run setup. Scans for available capabilities (Docker MCPs, agent-browser, Playwright, Stripe CLI) and caches results. Returning runs validate the config, check trust, and refresh stale capabilities.
@@ -282,6 +293,7 @@ Phase 8: Cleanup    ← Remove test data, verify clean state
 - **Phase 6** auto-fixes runtime issues (env vars, containers) up to 3 times. Code bugs are documented and shown to you.
 - **Phase 7** generates timestamped markdown reports from templates.
 - **Phase 8** removes test data by prefix, verifies cleanup with DB queries, and logs every action.
+- **Phase 9** displays a context reset advisory reminding you to run `/clear` before invoking another skill.
 
 [Back to top](#autonomous-tests)
 

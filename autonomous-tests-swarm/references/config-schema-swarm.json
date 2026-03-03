@@ -1,0 +1,66 @@
+{
+  "$schema": "autonomous-tests-swarm-config",
+  "_description": "Swarm section added to .claude/autonomous-tests.json — each agent spins up its own isolated Docker environment",
+  "swarm": {
+    "dockerContext": "docker-desktop | default | custom-name — auto-detected, Docker Desktop prioritized",
+    "mode": "compose | raw-docker — compose uses docker-compose files; raw-docker uses docker run commands",
+    "composeFile": "docker-compose.yml | null — path to compose file (compose mode only)",
+    "composePath": "./relative/path-to-compose-dir | null",
+    "rawDockerServices": [
+      {
+        "name": "service-name",
+        "image": "mongo:7 | postgres:16 | custom-image",
+        "containerPort": 27017,
+        "envVars": { "MONGO_INITDB_DATABASE": "testdb" },
+        "volumes": ["data-volume:/data/db | null"],
+        "healthCheck": "docker exec {containerName} mongosh --eval 'db.runCommand({ping:1})' | null",
+        "_comment": "raw-docker mode only — each service becomes a docker run command"
+      }
+    ],
+    "portRangeStart": 9000,
+    "portStep": 100,
+    "maxAgents": 5,
+    "portMappings": [
+      {
+        "service": "service-name",
+        "containerPort": 8000,
+        "healthCheck": "curl -sf http://localhost:{port}/_health/live | null"
+      }
+    ],
+    "initialization": {
+      "commands": [
+        "docker compose -p {projectName} exec backend python manage.py migrate",
+        "docker compose -p {projectName} exec backend python manage.py seed_test_data"
+      ],
+      "waitAfterStartSeconds": 5
+    },
+    "relatedServices": {
+      "project-name": {
+        "composePath": "/absolute/path/to/related | null",
+        "composeFile": "docker-compose.yml | null",
+        "mode": "compose | raw-docker",
+        "portMappings": [
+          {
+            "service": "webapp",
+            "containerPort": 3000,
+            "healthCheck": "curl -sf http://localhost:{port} | null"
+          }
+        ],
+        "initialization": {
+          "commands": []
+        }
+      }
+    },
+    "tmpDir": "/tmp/autonomous-swarm-{sessionId}",
+    "cleanup": {
+      "removeVolumes": true,
+      "removeOrphans": true
+    }
+  },
+  "_templatePlaceholders": {
+    "{projectName}": "swarm-{N} — agent's compose project / container prefix",
+    "{port}": "assigned host port for that service",
+    "{containerName}": "swarm-{N}-{service} — container name",
+    "{sessionId}": "unique session identifier (timestamp-based, from date -u +%Y%m%d%H%M%S)"
+  }
+}

@@ -35,7 +35,10 @@
     "type": "mongodb | postgres | mysql | sqlite | none",
     "connectionCommand": "docker compose exec mongodb mongosh dbname",
     "testDbName": "test-db-name",
-    "container": "container-name | null"
+    "container": "container-name | null",
+    "seedCommand": "docker compose exec backend python manage.py seed_test_data | null",
+    "migrationCommand": "docker compose exec backend python manage.py migrate | null",
+    "cleanupCommand": "docker compose exec mongodb mongosh dbname --eval 'db.dropDatabase()' | null"
   },
   "externalServices": [
     {

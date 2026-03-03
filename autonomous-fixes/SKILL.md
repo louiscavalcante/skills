@@ -71,9 +71,10 @@ This skill reuses `.claude/autonomous-tests.json` — no separate config file.
 1. Run `test -f .claude/autonomous-tests.json && echo "CONFIG_EXISTS" || echo "CONFIG_MISSING"` in Bash.
 2. If `CONFIG_MISSING`, **STOP**: "No autonomous-tests config found. Run `/autonomous-tests` first to set up your project and generate test findings."
 3. Read the config. Validate `version` equals `4`.
-4. **Verify config trust**: compute SHA-256 hash (same method as autonomous-tests) and check against `~/.claude/trusted-configs/`. If untrusted, show config for confirmation (redact `testCredentials` values).
+4. **Verify config trust**: compute SHA-256 hash (same method as autonomous-tests) and check against `~/.claude/trusted-configs/`. If untrusted, show config for confirmation (redact `testCredentials` values). Use `AskUserQuestion` to prompt for approval — the hook ensures this prompt is always shown even in `dontAsk` or bypass mode.
 5. **Ensure `documentation.fixResults`**: if missing, add `"fixResults": "docs/_autonomous/fix-results"` to the config and save.
 6. **Ensure `userContext.credentialType`**: if `userContext.testCredentials` exists but `userContext.credentialType` is missing or empty, prompt the user for each credential role: "Is `{role-name}` **token-based** (API key, JWT — stateless, parallel-safe) or **session-based** (cookie, login — stateful, sequential-only)?" Save answers to `userContext.credentialType`. This determines whether fix agents can run in parallel with a single credential. Only prompt once — skip if `credentialType` already has entries for all credential roles.
+7. **Re-stamp config trust**: if the config was modified during steps 5 or 6 (e.g., added `fixResults` or `credentialType`), re-compute the SHA-256 hash and write it to the trust store. This prevents false "config changed" warnings on the next run of any skill. Use the same hash computation as step 4.
 
 **Step 2: Findings Scan**
 
@@ -245,6 +246,23 @@ Re-run autonomous-tests to verify: `/autonomous-tests`
 
 If `Ready for Re-test: YES` in the fix-results document, inform the user that autonomous-tests will prioritize re-testing these items on next run.
 
+## Phase 7 — Source Document Cleanup
+
+After the Loop Signal, evaluate whether source documentation files can be removed:
+
+1. **Check resolution status**: For each source document targeted in this fix cycle:
+   - Pending-fixes: every `## Fix N:` must have `### Resolution` with `Status: RESOLVED` and `Verification: PASS`
+   - Test-results `### Requires Fix`: every entry must have a fix-applied annotation
+   - Test-results `### Vulnerabilities` / `### API Response Security`: every entry must be addressed with `Status: RESOLVED`
+
+2. **All resolved — offer removal**: If ALL items are RESOLVED (none skipped, PARTIAL, or UNABLE), prompt via `AskUserQuestion`:
+   > "All findings in `{filename}` have been resolved. Remove this source document? Fix-results are preserved as the permanent record."
+   If confirmed, delete the source file. If declined, keep it.
+
+3. **Any unresolved — keep files**: If ANY items were skipped, PARTIAL, or UNABLE, do NOT offer removal. Inform the user: "Source document `{filename}` retained — {N} items remain unresolved: {list IDs}."
+
+4. **Never remove fix-results**: Fix-results documents are the permanent record and are needed by autonomous-tests for re-test prioritization.
+
 **Vulnerability warning**: If any V-prefix items remain PARTIAL or UNABLE, emit a prominent warning with security priority ranking:
 
 ```
@@ -259,6 +277,12 @@ Priority order (highest risk first):
 4. Denial-of-service risks — {list V-prefix items if any}
 5. Compliance violations — {list V-prefix items if any}
 ```
+
+## Phase 8 — Context Reset Advisory
+
+After all phases complete, display this message prominently:
+
+> **Important**: Run `/clear` before invoking another skill (e.g., `/autonomous-tests` to re-test) to free context window tokens and prevent stale state from interfering with the next operation.
 
 ---
 

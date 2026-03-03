@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup-hook.sh — Configure Claude Code settings for the autonomous-tests skill.
+# setup-hook.sh — Configure Claude Code settings for the autonomous-tests-swarm skill.
 #
 # Installs four things into ~/.claude/settings.json:
 #   1. ExitPlanMode approval hook (forces plan approval even in dontAsk mode)
@@ -7,7 +7,7 @@
 #   3. CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS env flag (enables agent teams)
 #   4. Model set to claude-opus-4-6 (required for agent team reasoning)
 #
-# The autonomous-tests skill already includes both hooks as skill-scoped hooks,
+# The autonomous-tests-swarm skill already includes both hooks as skill-scoped hooks,
 # so this script is only needed if you want the behavior globally.
 #
 # Usage: bash setup-hook.sh
@@ -22,7 +22,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo "=== Autonomous Tests — Settings Installer ==="
+echo "=== Autonomous Tests Swarm — Settings Installer ==="
 echo ""
 
 # Check for python3

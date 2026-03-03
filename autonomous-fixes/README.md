@@ -203,6 +203,8 @@ Phase 3: Execute      ← Agent Teams apply fixes
 Phase 4: Verify       ← Confirm fixes work, security checks for V-prefix
 Phase 5: Document     ← Generate fix-results, update pending-fixes/test-results
 Phase 6: Loop Signal  ← Signal readiness for re-testing
+Phase 7: Doc Cleanup  ← Offer removal of fully-resolved source docs
+Phase 8: Advisory     ← Remind user to /clear before next skill
 ```
 
 - **Phase 0** validates the shared config and scans `_autonomous/` directories for findings.
@@ -212,6 +214,8 @@ Phase 6: Loop Signal  ← Signal readiness for re-testing
 - **Phase 4** verifies each fix. V-prefix items get additional security verification with variant payloads and hardening checks.
 - **Phase 5** generates fix-results document, appends resolution blocks to pending-fixes, and annotates test-results.
 - **Phase 6** summarizes results and signals re-test readiness for the autonomous-tests loop.
+- **Phase 7** offers to remove source documents (pending-fixes, test-results) when all their findings are fully resolved. Fix-results are never removed — they're the permanent record.
+- **Phase 8** displays a context reset advisory reminding you to run `/clear` before invoking another skill.
 
 [Back to top](#autonomous-fixes)
 

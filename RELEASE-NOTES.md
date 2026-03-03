@@ -1,5 +1,34 @@
 # Release Notes
 
+## v1.2.0 (2026-03-03)
+
+### Added
+- **autonomous-tests-swarm skill**: Per-agent Docker isolation — each agent spins up its own database, API, and services on unique ports, runs migrations/seeds, executes test suites, and tears down independently. No shared state, no credential conflicts, true parallel testing.
+- **Docker context detection**: Auto-detects available Docker contexts, prioritizes Docker Desktop when available
+- **Port discovery and allocation**: Scans for available port ranges, assigns non-conflicting ranges per agent
+- **Compose and raw-docker modes**: Supports both docker-compose-based and raw `docker run` environments
+- **Related service inclusion**: Agents can include related projects (e.g., webapp + backend) in their isolated stack
+- **Failure redistribution**: If an agent's environment fails to start, its suites are redistributed to a healthy agent
+- **Swarm config schema** (`references/config-schema-swarm.json`): Defines the `swarm` section for `.claude/autonomous-tests.json`
+- **Trigger tests** for autonomous-tests-swarm: 2 prompt files
+- **Database seeding fields** in config schema: `database.seedCommand`, `database.migrationCommand`, `database.cleanupCommand` — agents execute in order: migrate → seed → test → cleanup
+- **Auto-detection of seed/migration commands** during first-run setup: scans compose files, `scripts/` directories, Makefiles, and package.json for common patterns (`manage.py migrate`, `npx prisma db seed`, `knex seed:run`, etc.)
+- **Explicit MongoDB and SQL detection** in Phase 0: checks both MongoDB indicators (`mongosh`, `mongoose`, `mongodb://`) and SQL indicators (`psql`, `prisma`, `pg`, `postgres://`) to set `database.type` accurately
+- **Database operation distinction in Phase 3**: feature map now distinguishes MongoDB operations (`find`, `aggregate`, `insertMany`, etc.) from SQL operations (`SELECT`, `JOIN`, `CREATE TABLE`, migrations, ORM ops)
+- **Per-suite database seeding in swarm** (autonomous-tests-swarm): each agent's task description includes explicit lifecycle commands adapted for `swarm-{N}` namespace
+- **Context Reset Advisory** (Phase 9 / Phase 8): all three skills now display a prominent reminder to run `/clear` before invoking another skill to free context window tokens
+- **AskUserQuestion hook** added to autonomous-tests and autonomous-tests-swarm: all three skills now have identical hooks (ExitPlanMode + AskUserQuestion) for consistent behavior
+- **Source Document Cleanup** (autonomous-fixes Phase 7): after all findings are resolved, offers to remove source documents (pending-fixes, test-results) via `AskUserQuestion`. Fix-results are never removed — they're the permanent record.
+- **Testing priorities prompt** (autonomous-tests + swarm): on every returning run, prompts the user to update `testingPriorities` with current pain points. "None" clears cached priorities so agents start fresh. Updated priorities feed into the Feature Context Document cascaded to all agents.
+
+### Changed
+- **Sequential execution reworked** (autonomous-tests): now creates one task per suite with a fresh agent spawned for each — agent is shut down after completing its suite, and a new agent is spawned for the next. This keeps context clean and avoids token exhaustion from accumulated state.
+- **Trust verification uses AskUserQuestion** in all three skills: the hook ensures the approval prompt is always shown even in `dontAsk` or bypass mode
+- **Setup scripts install 4 items** (up from 3): ExitPlanMode hook, AskUserQuestion hook, Agent Teams flag, and model — for both autonomous-tests and autonomous-tests-swarm
+
+### Fixed
+- **Config trust hash mismatch between skills**: All three skills now re-stamp the trust hash at the end of Phase 0 after all config modifications (adding `fixResults`, `credentialType`, service re-scans, `swarm` section). Previously, config modifications happened before or after the trust check without re-stamping, causing false "config changed" warnings when switching between skills.
+
 ## v1.1.1 (2026-03-03)
 
 ### Fixed

@@ -7,6 +7,7 @@
 # then checks if the skill was triggered in the output.
 #
 # Skill detection: prompt filenames containing "fix" target autonomous-fixes,
+# filenames containing "swarm" target autonomous-tests-swarm,
 # all others target autonomous-tests.
 
 set -euo pipefail
@@ -24,6 +25,9 @@ fi
 if [[ "$PROMPT_NAME" == *fix* ]]; then
   SKILL_DIR="$REPO_ROOT/autonomous-fixes"
   EXPECTED_SKILL="autonomous-fixes"
+elif [[ "$PROMPT_NAME" == *swarm* ]]; then
+  SKILL_DIR="$REPO_ROOT/autonomous-tests-swarm"
+  EXPECTED_SKILL="autonomous-tests-swarm"
 else
   SKILL_DIR="$REPO_ROOT/autonomous-tests"
   EXPECTED_SKILL="autonomous-tests"

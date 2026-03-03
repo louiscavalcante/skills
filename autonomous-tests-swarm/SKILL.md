@@ -1,7 +1,6 @@
 ---
-name: autonomous-tests
-description: 'Run autonomous E2E tests. Args: staged | unstaged | N (last N commits) | working-tree
-  | file:<path> | rescan (default: working-tree with smart doc analysis). Example: /autonomous-tests 3 file:docs/feature.md'
+name: autonomous-tests-swarm
+description: 'Run autonomous E2E tests with per-agent Docker isolation. Each agent spins up its own database, API, and services on unique ports — true parallel testing with zero credential conflicts. Args: staged | unstaged | N | working-tree | file:<path> | rescan'
 argument-hint: 'staged | unstaged | N | working-tree | file:<path> | rescan'
 disable-model-invocation: true
 allowed-tools: Bash(*), Read(*), Write(*), Edit(*), Glob(*), Grep(*), Agent(*),
@@ -28,13 +27,15 @@ hooks:
 - Staged: !`git diff --cached --stat 2>/dev/null | tail -5`
 - Commits: !`git log --oneline -5 2>/dev/null`
 - Docker: !`docker compose ps 2>/dev/null | head -10 || echo "No docker-compose found"`
+- Docker Context: !`docker context show 2>/dev/null || echo "unknown"`
 - Config: !`test -f .claude/autonomous-tests.json && echo "YES" || echo "NO -- first run"`
+- Swarm Config: !`python3 -c "import json;c=json.load(open('.claude/autonomous-tests.json'));print('YES' if 'swarm' in c else 'NO -- needs setup')" 2>/dev/null || echo "NO -- config missing"`
 - Agent Teams: !`python3 -c "import json;s=json.load(open('$HOME/.claude/settings.json'));print('ENABLED' if s.get('env',{}).get('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS')=='1' else 'DISABLED')" 2>/dev/null || echo "DISABLED -- settings not found"`
 - Capabilities: !`python3 -c "import json;c=json.load(open('.claude/autonomous-tests.json')).get('capabilities',{});mcps=len(c.get('dockerMcps',[]));ab='Y' if c.get('frontendTesting',{}).get('agentBrowser') else 'N';pw='Y' if c.get('frontendTesting',{}).get('playwright') else 'N';sc='Y' if c.get('stripeCli',{}).get('available') else 'N';print(f'MCPs:{mcps} agent-browser:{ab} playwright:{pw} stripe-cli:{sc} scanned:{c.get(\"lastScanned\",\"never\")}')" 2>/dev/null || echo "NOT SCANNED"`
 
 ## Role
 
-Project-agnostic autonomous E2E test runner. Exercise features against the live LOCAL stack, verify state at every step, produce documentation, never touch production.
+Project-agnostic autonomous E2E test runner with **per-agent Docker isolation**. Each agent spins up its own fully isolated Docker environment (database, API, related services) on unique ports, runs migrations/seeds, executes test suites, and tears down. No shared state, no credential conflicts, true parallel testing. Never touch production.
 
 ## Arguments: $ARGUMENTS
 
@@ -68,7 +69,7 @@ Read `~/.claude/settings.json` and check two things:
    Do not proceed until the flag is confirmed enabled.
 
 2. **ExitPlanMode hook** (informational): if the `PreToolUse` → `ExitPlanMode` hook is not present, inform the user:
-   > The `ExitPlanMode` approval hook ensures test plans require your approval before execution (even in `dontAsk` mode). This skill includes it as a skill-scoped hook, so it works automatically during `/autonomous-tests` runs. To also enable it globally, the setup script above already handles it.
+   > The `ExitPlanMode` approval hook ensures test plans require your approval before execution (even in `dontAsk` mode). This skill includes it as a skill-scoped hook, so it works automatically during `/autonomous-tests-swarm` runs. To also enable it globally, the setup script above already handles it.
    Then continue — do not block on this.
 
 **Step 1: Capabilities Scan**
@@ -87,23 +88,44 @@ When triggered, run three checks in parallel:
 
 Write results to `capabilities` in config with `lastScanned` set to current UTC time (obtained via `date -u`).
 
-**Step 2: Run `test -f .claude/autonomous-tests.json && echo "CONFIG_EXISTS" || echo "CONFIG_MISSING"` in Bash.**
+**Step 2: Docker Context Detection**
 
-Schema reference: `references/config-schema.json`.
+1. Run `docker context ls --format '{{.Name}} {{.Current}}'` to list available contexts
+2. If `docker-desktop` context exists → use it (set as current if not already: `docker context use docker-desktop`)
+3. If only `default` or other contexts → use current, but inform user: "Using Docker context `{name}`. Docker Desktop context not found."
+4. Store detected context in `swarm.dockerContext`
+
+**Step 3: Config Validation**
+
+Run `test -f .claude/autonomous-tests.json && echo "CONFIG_EXISTS" || echo "CONFIG_MISSING"` in Bash.
+
+Schema reference: the base config uses `autonomous-tests/references/config-schema.json`. The `swarm` section uses `references/config-schema-swarm.json` from this skill.
 
 ### If output is `CONFIG_EXISTS` (returning run):
 
 1. Read `.claude/autonomous-tests.json`
 2. **Validate config version**: check that `version` equals `4` and that the required fields (`project`, `database`, `testing`) exist. If `version` is `3`, perform **v3→v4 migration**: add an empty `capabilities` section (with `lastScanned: null`), bump `version` to `4`, inform the user: "Config migrated from v3 to v4. Capabilities will be scanned on this run." Then continue with the capabilities scan in Step 1 above. If version is less than `3` or required fields are missing, warn the user and re-run the first-run setup below instead.
-   **Ensure `documentation.fixResults`**: if the `documentation` section exists but `fixResults` is missing, add `"fixResults": "docs/_autonomous/fix-results"` as the default path. This enables the autonomous-fixes loop.
-   **Ensure `userContext.credentialType`**: if `userContext.testCredentials` exists but `userContext.credentialType` is missing or empty, prompt the user for each credential role: "Is `{role-name}` **token-based** (API key, JWT — stateless, parallel-safe) or **session-based** (cookie, login — stateful, sequential-only)?" Save answers to `userContext.credentialType`. This determines whether agents can run in parallel with a single credential. Only prompt once — skip if `credentialType` already has entries for all credential roles.
-3. **Verify config trust**: compute a SHA-256 hash of the config content (excluding the `_configHash`, `lastRun`, and `capabilities` fields) by running: `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"`. Then check if this hash exists in the **trust store** at `~/.claude/trusted-configs/` (the trust file is named after a hash of the project root: `python3 -c "import hashlib,os;print(hashlib.sha256(os.path.realpath('.').encode()).hexdigest()[:16])"` + `.sha256`). If the trust file is missing or its content doesn't match the computed hash, the config has not been approved by this user — **show the config to the user for confirmation, but redact all values in `userContext.testCredentials`** — display only the role names (keys) with values replaced by `"********"`. Never output raw credential values, env var references, or descriptions from this field. This prevents accidental exposure even if raw secrets were stored in the config. Use `AskUserQuestion` to prompt for approval — the hook ensures this prompt is always shown even in `dontAsk` or bypass mode. If confirmed, write the new hash to the trust store file (`mkdir -p ~/.claude/trusted-configs/` first). This prevents a malicious config committed to a repo from bypassing approval, since the trust store lives outside the repo in the user's home directory.
+   **Ensure `documentation.fixResults`**: if the `documentation` section exists but `fixResults` is missing, add `"fixResults": "docs/_autonomous/fix-results"` as the default path.
+3. **Verify config trust**: compute a SHA-256 hash of the config content (excluding the `_configHash`, `lastRun`, and `capabilities` fields) by running: `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"`. Then check if this hash exists in the **trust store** at `~/.claude/trusted-configs/` (the trust file is named after a hash of the project root: `python3 -c "import hashlib,os;print(hashlib.sha256(os.path.realpath('.').encode()).hexdigest()[:16])"` + `.sha256`). If the trust file is missing or its content doesn't match the computed hash, the config has not been approved by this user — **show the config to the user for confirmation, but redact all values in `userContext.testCredentials`** — display only the role names (keys) with values replaced by `"********"`. Never output raw credential values, env var references, or descriptions from this field. Use `AskUserQuestion` to prompt for approval — the hook ensures this prompt is always shown even in `dontAsk` or bypass mode. If confirmed, write the new hash to the trust store file (`mkdir -p ~/.claude/trusted-configs/` first).
 4. **Testing priorities prompt**: Show the current `userContext.testingPriorities` from config (or "None set" if empty/missing). Use `AskUserQuestion` to ask: "Any pain points or testing priorities for this run?" Present the current priorities for reference and offer options including "None" to clear any cached priorities. If the user provides new priorities, replace `userContext.testingPriorities` in config. If the user selects "None", set `userContext.testingPriorities` to an empty array `[]` — this clears stale priorities so agents start fresh. If the user keeps existing priorities, no change needed. Updated priorities are cascaded to agents via the Feature Context Document in Phase 5.
 5. Re-scan for new services and update config if needed
 6. Get current UTC time by running `date -u +"%Y-%m-%dT%H:%M:%SZ"` in Bash, then update `lastRun` with that exact value (never guess the time)
 7. If `userContext` is missing or all arrays are empty, run the **User Context Questionnaire** below once, then save answers to config
-8. **Re-stamp config trust**: if the config was modified during any of the steps above (steps 2, 4, 5, or 7 — e.g., added `fixResults`, `credentialType`, updated priorities, updated services), re-compute the hash and write it to the trust store. This prevents false "config changed" warnings on the next run. Use the same hash computation as step 3.
-9. **Skip to Phase 1** — do NOT run first-run steps below
+8. **Ensure `swarm` section exists** — if missing, run the Swarm Configuration Questionnaire below
+9. **Re-stamp config trust**: if the config was modified during any of the steps above (steps 2, 4, 5, 7, or 8 — e.g., added `fixResults`, updated priorities, updated services, added `swarm` section), re-compute the SHA-256 hash and write it to the trust store. This prevents false "config changed" warnings on the next run of any skill. Use the same hash computation as step 3.
+10. **Skip to Phase 1** — do NOT run first-run steps below
+
+### Swarm Configuration Questionnaire (runs when `swarm` section is absent):
+
+1. **Detect mode**: Check for compose files in `project.services[].path` and project root. If found → `mode: "compose"`. If no compose file but project uses Docker containers (detected from `project.services[].type` or `docker ps`) → `mode: "raw-docker"`. Ask user to confirm.
+2. **Compose mode**: Parse compose file to extract service names and port mappings → populate `portMappings`
+3. **Raw Docker mode**: Ask user which images/containers the project uses, what ports they expose, what env vars they need → populate `rawDockerServices`
+4. Ask: "What initialization commands should run after services start?" (migrations, seeds, indexes, init scripts)
+5. For each related project: "Does `{name}` need its own services in the agent's test stack? (e.g., webapp needs the backend API running)" → populate `relatedServices`
+6. Ask: "Maximum parallel agents?" (default: 5)
+7. Save swarm section to config and re-stamp config trust
+
+No `credentialType` questions — each agent creates its own test data. Skip `userContext.testCredentials` and `credentialType` — not needed for swarm.
 
 ### If output is `CONFIG_MISSING` (first run only):
 
@@ -120,22 +142,33 @@ Schema reference: `references/config-schema.json`.
 4. **Capabilities scan** — run Step 1 above (capabilities scan) before the User Context Questionnaire so detected capabilities can inform the config proposal.
 5. **User Context Questionnaire** — present all questions at once, accept partial answers:
    - Any known flaky areas or intermittent failures?
-   - Test user credentials to use (reference env var names or role names, never raw values)?
-   - For each credential: is it **token-based** (API key, JWT — stateless, parallel-safe) or **session-based** (cookie, login — stateful, sequential-only)? Default: session.
    - Any specific testing priorities or focus areas?
    - Any additional notes for the test runner?
-   Store answers in the `userContext` section of the config. Store credential type answers in `userContext.credentialType` (e.g., `{"admin": "token", "member": "session"}`).
-6. **Propose config** → STOP and wait for user to confirm → write config
-7. **Stamp config trust**: after writing, compute the config hash with `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"` and write the result to the trust store at `~/.claude/trusted-configs/{project-hash}.sha256` (create the directory if needed). This marks the config as user-approved in a location outside the repo that cannot be forged by a committed file.
-8. If project CLAUDE.md < 140 lines and lacks startup instructions, append max 10 lines.
+   Store answers in the `userContext` section of the config. Skip credential questions — swarm agents create their own test data.
+6. **Swarm Configuration Questionnaire** — run the swarm questionnaire above
+7. **Propose config** → STOP and wait for user to confirm → write config
+8. **Stamp config trust**: after writing, compute the config hash with `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"` and write the result to the trust store at `~/.claude/trusted-configs/{project-hash}.sha256` (create the directory if needed).
+9. If project CLAUDE.md < 140 lines and lacks startup instructions, append max 10 lines.
 
 ## Phase 1 — Safety
 
 **ABORT if any production indicators found** in `.env` files: `sk_live_`, `pk_live_`, `*LIVE*SECRET*`, `NODE_ENV=production`, production DB endpoints (RDS, Atlas without dev/stg/test), non-local API URLs. Show variable NAME only, never the value. Run `sandboxCheck` commands from config. Verify Docker is local.
 
-## Phase 2 — Service Startup
+## Phase 2 — Port Discovery & Environment Validation
 
-For each service in config **and each related project with a `startCommand`**: health check → if unhealthy, start + poll 30s → if still unhealthy, STOP for user guidance. Start webhook listeners in background. Tail logs for errors during execution.
+Do NOT start the shared stack — agents start their own isolated environments.
+
+1. **Verify Docker context**: ensure the correct Docker context is active (`docker context show`). If it doesn't match `swarm.dockerContext`, run `docker context use {swarm.dockerContext}`.
+2. **Create session temp dir**: `mkdir -p /tmp/autonomous-swarm-{sessionId}` (use `date -u +%Y%m%d%H%M%S` for sessionId). Store `sessionId` for later phases.
+3. **Scan for available port ranges** starting from `swarm.portRangeStart`:
+   - For each planned agent (N agents for N suites, capped at `maxAgents`), check if the port range `portRangeStart + N * portStep` through `portRangeStart + N * portStep + portStep - 1` has no conflicts
+   - Check conflicts via: `ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null` or Python socket binding test
+   - If a range is blocked, skip it and try the next
+4. Reserve ranges and store assignments for Phase 5
+5. **Validate environment**:
+   - Compose mode: validate compose file exists and is parseable (`docker compose -f {file} config --quiet`)
+   - Raw Docker mode: validate images exist locally or can be pulled (`docker image inspect {image} || docker pull {image}`)
+   - Check Docker disk space: `docker system df` — warn if space is low (agents will spin up N copies)
 
 ## Phase 3 — Autonomous Feature Identification & Discovery
 
@@ -174,13 +207,16 @@ All identification is fully autonomous — derive everything from the code diff 
 **Enter plan mode (Use /plan).** The plan MUST start with a "Context Reload" section as **Step 0** containing:
 - Instruction to re-read this skill file (the SKILL.md that launched this session)
 - Instruction to read the config: `.claude/autonomous-tests.json`
-- Instruction to read the templates: the `references/templates.md` file from this skill
+- Instruction to read the templates: `autonomous-tests/references/templates.md` (shared with autonomous-tests)
 - The resolved scope arguments: `$ARGUMENTS`
 - The current branch name and commit range being tested
 - Any related project paths involved
 - Key findings from Phase 3 (affected modules, endpoints, dependencies)
 - The `userContext` from config (flaky areas, testing priorities, notes)
-- Credential assignment plan for agent teams (see Phase 5)
+- The `swarm` config section
+- Port assignments per agent (from Phase 2)
+- Initialization commands
+- Related project inclusion map (which suites need which related projects)
 
 This ensures that when context is cleared after plan approval, the executing agent can fully reconstruct the session state.
 
@@ -192,89 +228,91 @@ Then design test suites covering **all** of the following categories:
 4. **Error handling** — trigger every error branch visible in the diff (network failures, invalid state transitions, auth failures, permission denials)
 5. **Unexpected database changes** — verify no orphaned records, no missing references, no unintended field mutations, no index-less slow queries on new fields
 6. **Race conditions & timing** — concurrent writes to same resource, out-of-order webhook delivery, expired tokens mid-flow
-7. **Security** — comprehensive attack surface analysis covering:
-   - *Injection attacks*: SQL, NoSQL, command injection, LDAP injection, XPath injection, template injection (SSTI), header injection, log injection
-   - *Cross-site attacks*: XSS (stored, reflected, DOM-based), CSRF, clickjacking
-   - *Authentication/Authorization*: auth bypass, broken access control, privilege escalation, insecure session management, missing MFA verification, JWT manipulation (alg:none, key confusion)
-   - *Data exposure*: sensitive data in responses (see API Response Security above), verbose error messages, stack traces in production-like responses, internal metadata leakage, information disclosure via timing attacks
-   - *Input handling as attack vectors* — treat ALL user-controlled inputs as potential attack surfaces: file uploads (abnormal sizes, malformed content, zip bombs, polyglot files, path traversal in filenames, content-type mismatch), API payloads (oversized payloads, deeply nested objects, type confusion, prototype pollution), query parameters (injection, parameter pollution, encoding bypass), headers (host header injection, SSRF via forwarded headers), request volume (excessive requests/rate limiting, resource exhaustion, ReDoS patterns)
-   - *Infrastructure*: SSRF, path traversal, insecure deserialization, components with known vulnerabilities, security misconfiguration, insufficient logging/monitoring
-   - *Compliance*: data minimization violations, unnecessary PII collection, missing consent verification, retention policy violations
-
-   All security findings go into the `### Vulnerabilities` subsection of `## Issues Found` in test-results (not mixed into `### Requires Fix`). Each vulnerability entry includes: (1) clear risk explanation, (2) realistic exploitation scenario, (3) regulatory/operational impact, (4) recommended mitigation strategy, (5) priority ranking: data leaks > credential exposure > privilege escalation > DoS risks > compliance violations
+7. **Security** — comprehensive attack surface analysis (injection, XSS/CSRF, auth bypass, data exposure, input handling, infrastructure, compliance — same categories as autonomous-tests)
 8. **Edge cases from code reading** — every `if/else`, `try/catch`, guard clause, and fallback in the changed code should have at least one test targeting it
 9. **Regression** — existing unit tests if configured, plus re-verify any previously broken flows
 
+The plan must include per-agent environment setup: "Each agent generates a modified compose file (or docker run commands), starts its stack, runs initialization, then executes suites."
+
+The plan must note: "If an agent's environment fails to start (compose up fails, health check timeout), its suites are reassigned to another agent's existing environment or queued for retry."
+
 Each suite needs: name, objective, pre-conditions, steps with expected outcomes, teardown, and explicit **verification queries** (DB checks, log checks, API response checks). **Wait for user approval.**
 
-## Phase 5 — Execution (Agent Teams)
+## Phase 5 — Execution (Agent Swarm)
 
-Use `TeamCreate` to create a test team. Spawn `general-purpose` Agents as teammates — one per approved suite. **Always use `model: "opus"` when spawning agents** (Opus 4.6 has adaptive reasoning/thinking built-in — no budget to configure, it thinks as deeply as needed automatically). Coordinate via `TaskCreate`/`TaskUpdate` and `SendMessage`.
+Use `TeamCreate` to create a test team. Spawn `general-purpose` Agents as teammates — one per suite (or group if suites share dependencies). **Always use `model: "opus"` when spawning agents**. ALL agents run in parallel — no credential conflicts possible since each agent has its own isolated environment. Coordinate via `TaskCreate`/`TaskUpdate` and `SendMessage`.
 
-**Credential sharing — CRITICAL**: Assign each agent a **distinct test credential** from `userContext.testCredentials` to prevent session conflicts (e.g., one agent logging in invalidates another's token). Check `userContext.credentialType` for each role — `"token"` means stateless (API key, JWT) and is parallel-safe even with a single credential; `"session"` (or absent — the default) means stateful (cookie, login session) and requires sequential execution if shared. If only one credential exists **and** its type is `"session"` (or unset), run agents **sequentially** — never in parallel with shared session-based auth. If only one credential exists but its type is `"token"`, agents may run in **parallel** since token-based auth is stateless and concurrent use does not cause conflicts. Include only the **role name** (key from `testCredentials`) in each agent's task description — never the credential value or env var reference. Each agent must resolve its assigned credential by reading the config file or environment at runtime.
+**Cascading context — CRITICAL**: Every agent MUST receive the full **Feature Context Document** from Phase 3 in its task description. This includes: all features touched, all endpoints, all DB collections affected, all external services involved, all identified edge cases, prior test history, and available capabilities. Agents need this complete picture to understand cross-feature side-effects.
 
-**Cascading context — CRITICAL**: Every agent MUST receive the full **Feature Context Document** from Phase 3 in its task description. This includes: all features touched, all endpoints, all DB collections affected, all external services involved, all identified edge cases, prior test history, and available capabilities. Agents need this complete picture to understand cross-feature side-effects (e.g., testing endpoint A may break endpoint B's state).
+**Capability-aware execution**: Same as autonomous-tests — agents leverage detected capabilities:
+- Use `agent-browser` **first** if `frontendTesting.agentBrowser` is true and the suite involves UI testing
+- Use Playwright **only as fallback** if agent-browser is not available
+- Use `mcp-add` to activate Docker MCPs from `dockerMcps` that are marked `safe: true` and relevant
+- Use Stripe CLI if `stripeCli.available` is true and `stripeCli.blocked` is false
+- **NEVER** activate MCPs where `safe: false`
+- **NEVER** use Stripe CLI when `stripeCli.blocked` is true
 
-**Capability-aware execution**: Agents should leverage detected capabilities from config when relevant to their test suite. **Priority for web/frontend testing: agent-browser > Playwright** — always prefer `agent-browser` when available; only fall back to Playwright if agent-browser is unavailable or unsuitable for the specific test:
-- Use `agent-browser` **first** if `frontendTesting.agentBrowser` is true and the suite involves UI testing, browser-based verification, or any web interaction
-- Use Playwright **only as fallback** if `frontendTesting.playwright` is true and agent-browser is not available
-- Use `mcp-add` to activate Docker MCPs from `dockerMcps` that are marked `safe: true` and relevant to the test needs (e.g., a Stripe sandbox MCP for payment tests)
-- Use Stripe CLI if `stripeCli.available` is true and `stripeCli.blocked` is false for webhook forwarding, payment intent testing, or event simulation
-- **NEVER** activate MCPs where `safe: false` — these may be production or unknown-mode services
-- **NEVER** use Stripe CLI when `stripeCli.blocked` is true — this indicates live keys are configured
+**Anomaly detection**: Same as autonomous-tests — each agent watches for duplicate records, unexpected DB changes, warning/error logs, slow queries, orphaned references, unexpected auth behavior, and response anomalies.
 
-**Anomaly detection**: Each agent must actively watch for and report:
-- Duplicate records created by repeated API calls
-- Unexpected DB field changes outside the tested operation
-- Warning/error log entries that appear during test execution
-- Slow queries or missing indexes (check `docker logs` and DB explain plans)
-- Orphaned or inconsistent references between collections/tables
-- Auth tokens or sessions behaving unexpectedly (expired mid-flow, leaked between users)
-- Any response field or status code that differs from what the code intends
-
-**API Response Security Inspection**: Every agent must deeply analyze ALL API responses exercised during test execution and detect:
-
-*Exposed Identifiers*:
-- Internal database IDs (MongoDB ObjectIDs, auto-increment integers, UUIDs that reveal creation order)
-- Sequential or guessable IDs (enumeration attacks)
-- Sensitive resource references (file paths, internal URLs, infrastructure details)
-
-*Leaked Credentials/Secrets*:
-- API keys in response bodies or headers
-- Tokens (JWT, OAuth, session tokens) exposed beyond intended scope
-- Passwords or hashed credentials in responses
-- Environment variables or config values leaked in error messages
-- Cloud/infrastructure secrets (AWS keys, connection strings)
-
-*Exposed Personal Data* (multi-regulation compliance):
-- PII: names, emails, phone numbers, addresses, government IDs (CPF/SSN/etc.), dates of birth
-- Sensitive personal data: health records (HIPAA), financial data, biometric data, racial/ethnic origin, political opinions, religious beliefs, sexual orientation, genetic data
-- Data subject to privacy regulations:
-  - **LGPD** (Brazil): all personal data of Brazilian data subjects
-  - **GDPR** (EU): personal data of EU residents
-  - **CCPA/CPRA** (California): personal information of California consumers
-  - **HIPAA** (US): protected health information
-  - Other applicable regional regulations
-
-Each finding must be categorized by: **Severity**, **Regulatory impact** (which laws apply), **Exploitability** (how easily an attacker can leverage it), **Compliance risk** (legal/financial exposure). All API response security findings go into the `### API Response Security` subsection of `## Issues Found` in test-results documentation.
+**API Response Security Inspection**: Same as autonomous-tests — deep analysis of all API responses for exposed IDs, leaked credentials, PII, and compliance violations.
 
 **Execution flow**:
-1. Create tasks for each suite via `TaskCreate` — include: env details from config, exact test steps, verification queries, teardown instructions, the full Feature Context Document, the **role name** of the assigned credential, and **database lifecycle commands**:
-   - **Pre-test**: if `database.migrationCommand` exists, run migrations first. If `database.seedCommand` exists, seed test data after migrations.
-   - **Verification**: include `database.connectionCommand` for verification queries during and after tests.
-   - **Post-test**: if `database.cleanupCommand` exists, clean database state after suite execution. If no `cleanupCommand`, clean only data identified by `testDataPrefix`.
-   - Agents execute in order: migrate → seed → test → cleanup.
-2. Assign tasks to agents via `TaskUpdate` with `owner`
-3. For **parallel** execution (distinct credentials or token-based): create one task per suite and assign to separate agents. For **sequential** execution (single session-based credential): create **one task per suite** via `TaskCreate` (each task includes its suite steps, verification queries, database lifecycle commands, the full Feature Context Document, and the role name of the assigned credential). Then execute suites one at a time:
-   - Spawn ONE `general-purpose` agent with `model: "opus"` and `team_name`
-   - Assign it the first suite task via `TaskUpdate` with `owner`
-   - When the agent completes and marks the task done, shut it down via `SendMessage` with `type: "shutdown_request"`
-   - Spawn a **new** agent for the next suite task — a fresh agent keeps context clean and avoids token exhaustion from accumulated state
-   - Repeat until all suite tasks are complete
-   - Only one agent runs at a time — the orchestrator waits for each to finish before spawning the next
-   - Never execute test suites in the main conversation
-4. Report PASS/FAIL after each suite completes, including any anomalies detected
-5. After all suites complete, shut down teammates via `SendMessage` with `type: "shutdown_request"`
+
+1. Ensure correct Docker context is active: `docker context use {swarm.dockerContext}`
+2. Reserve port ranges for each agent (confirmed from Phase 2)
+3. Create tasks via `TaskCreate` — each task description includes:
+
+   **a. Environment spec**: project name (`swarm-{N}`), assigned port range, port mappings per service, Docker context to use
+
+   **b. Environment setup (compose mode)**:
+   - Read the project's compose file (path from `swarm.composeFile` and `swarm.composePath`)
+   - Generate a modified compose file at `/tmp/autonomous-swarm-{sessionId}/agent-{N}/docker-compose.yml` with:
+     - All host ports remapped to agent's assigned range
+     - Container names namespaced via `-p swarm-{N}`
+   - If related projects are needed: read their compose file, generate modified version in same dir, ensure services share a Docker network
+   - Start: `docker compose -p swarm-{N} -f /tmp/autonomous-swarm-{sessionId}/agent-{N}/docker-compose.yml up -d`
+
+   **c. Environment setup (raw Docker mode)**:
+   - For each service in `swarm.rawDockerServices`:
+     - `docker run -d --name swarm-{N}-{service} -p {assignedPort}:{containerPort} {envFlags} {volumeFlags} {image}`
+   - Create a Docker network: `docker network create swarm-{N}-net`
+   - Connect all containers: `docker network connect swarm-{N}-net swarm-{N}-{service}`
+   - If related projects need raw Docker services, start them and connect to the same network
+
+   **d. Health check**: Poll each service using remapped ports (from `portMappings[].healthCheck` with `{port}` and `{containerName}` resolved). Timeout: 60s. If unhealthy after 2 attempts, **report failure** via `SendMessage` — orchestrator redistributes suites to a healthy agent.
+
+   **e. Initialization**: Run each command from `swarm.initialization.commands` with `{projectName}` resolved to `swarm-{N}` and `{containerName}` resolved. Wait `waitAfterStartSeconds` between start and first init command.
+
+   **f. Related project init**: Run related project init commands if applicable
+
+   **f2. Per-suite database seeding**: Each suite's task description MUST include explicit database lifecycle commands adapted for the agent's environment:
+   - If `database.migrationCommand` exists: adapted for namespace (e.g., `docker compose -p swarm-{N} exec backend python manage.py migrate`)
+   - If `database.seedCommand` exists: adapted similarly
+   - `database.connectionCommand` adapted for verification queries
+   - If `database.cleanupCommand` exists: adapted for post-test cleanup
+   - Replace container names and project names with `swarm-{N}` namespace
+
+   **g. Test execution**: Run assigned test suites against the agent's own API (using remapped ports in all URLs)
+
+   **h. Results**: Report PASS/FAIL per suite with anomalies via `SendMessage`, same format as autonomous-tests
+
+   **i. Teardown (ALWAYS — even on failure)**:
+   - Compose mode: `docker compose -p swarm-{N} -f /tmp/autonomous-swarm-{sessionId}/agent-{N}/docker-compose.yml down -v --remove-orphans`
+   - Raw Docker mode: `docker stop $(docker ps -q --filter name=swarm-{N}) && docker rm $(docker ps -aq --filter name=swarm-{N}) && docker network rm swarm-{N}-net`
+   - Same for related project containers/compose if started
+   - Remove `/tmp/autonomous-swarm-{sessionId}/agent-{N}/` directory
+   - Verify no lingering containers: `docker ps -a --filter name=swarm-{N} -q`
+
+4. Spawn agents with `team_name` and assign tasks via `TaskUpdate` with `owner`
+5. All agents run in parallel
+6. **Failure redistribution**: if an agent reports environment startup failure via `SendMessage`, the orchestrator:
+   - Identifies which suites were assigned to the failed agent
+   - Picks a healthy agent that has completed or is about to complete its suites
+   - Sends the failed suites to the healthy agent via `SendMessage` (the healthy agent runs them against its already-running environment)
+   - The failed agent still tears down its partially-started environment
+7. After all agents complete, verify ALL Docker resources cleaned up: `docker ps -a --filter name=swarm- -q` should return empty
+8. Clean up session temp dir: `rm -rf /tmp/autonomous-swarm-{sessionId}`
+9. Shut down teammates via `SendMessage` with `type: "shutdown_request"`
 
 ## Phase 6 — Fix Cycle
 
@@ -283,7 +321,7 @@ Each finding must be categorized by: **Severity**, **Regulatory impact** (which 
 
 ## Phase 7 — Documentation
 
-Generate docs in dirs from config (create dirs if needed). Get filename timestamp by running `date -u +"%Y-%m-%d-%H-%M-%S"` in Bash (never guess the time). Filename pattern: `{timestamp}_{semantic-name}.md`. **Read `references/templates.md` for the exact output structure** of each file type before writing.
+Generate docs in dirs from config (create dirs if needed). Get filename timestamp by running `date -u +"%Y-%m-%d-%H-%M-%S"` in Bash (never guess the time). Filename pattern: `{timestamp}_{semantic-name}.md`. **Read `autonomous-tests/references/templates.md` for the exact output structure** of each file type before writing. The output format is identical to autonomous-tests.
 
 Generate up to four doc types based on findings:
 - **test-results**: Always generated. Full E2E results with pass/fail per suite.
@@ -296,6 +334,12 @@ On re-runs: if docs exist for this feature + date → append a "Re-run" section 
 ## Phase 8 — Cleanup
 
 Remove only test data created during this run (identified by `testDataPrefix` from config). Never touch pre-existing data. Log every action. Verify cleanup with a final DB query.
+
+Additionally, verify Docker cleanup:
+- Run `docker ps -a --filter name=swarm- -q` — must return empty
+- Run `docker network ls --filter name=swarm- -q` — must return empty
+- Verify `/tmp/autonomous-swarm-{sessionId}` is removed
+- If any orphaned resources remain, clean them up and warn the user
 
 ## Phase 9 — Context Reset Advisory
 
@@ -315,10 +359,19 @@ After all phases complete, display this message prominently:
 - Always spawn agents with `model: "opus"` for maximum reasoning capability
 - Be idempotent — skip or reset cleanly if test data already exists
 - Treat ALL external APIs with care — add delays between calls, use sandbox/test modes, minimize unnecessary requests
-- Never share auth tokens/sessions between agents — assign distinct credentials or run sequentially (see Phase 5)
 - If no unit tests exist → note in report, do not treat as a failure
 - Use UTC timestamps everywhere (docs, config, logs) — always obtain from `date -u`, never guess
-- Never activate Docker MCPs where `safe: false` — these may be production or unknown-mode services
-- Never use Stripe CLI when `stripeCli.blocked` is true — live keys are configured
+- Never activate Docker MCPs where `safe: false`
+- Never use Stripe CLI when `stripeCli.blocked` is true
 - Capabilities are auto-detected — never ask the user to manually configure them
 - When reading `_autonomous/` history, read only Summary and Issues Found sections — never read full historical documents
+- **Always tear down agent environments, even on failure — never leave orphaned containers**
+- **Never bind to ports already in use — always verify availability first**
+- **Never modify the project's original compose file — only generate copies in `/tmp/autonomous-swarm-{sessionId}/`**
+- **Always use `docker compose -p {projectName}` for namespace isolation**
+- **Include `--remove-orphans` and `-v` in teardown to prevent volume/network leaks**
+- **If compose startup fails, do NOT retry indefinitely — report failure after 2 attempts and redistribute suites**
+- **Never run initialization commands against the shared/main stack — only against agent-owned stacks**
+- **Always detect and use Docker Desktop context when available — prioritize over default context**
+- **All temp files go in `/tmp/` (OS temp dir) — never pollute the project directory**
+- **Clean up `/tmp/autonomous-swarm-{sessionId}/` at the end of every run, even on failure**
