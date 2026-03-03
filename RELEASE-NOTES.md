@@ -1,5 +1,10 @@
 # Release Notes
 
+## v1.1.1 (2026-03-03)
+
+### Fixed
+- **Enforce Agent Teams over plain Agent calls**: Added explicit rule prohibiting the `Agent` tool without `team_name` during execution phases — both skills now require the full `TeamCreate` → `TaskCreate` → spawn with `team_name` → `TaskUpdate` → `SendMessage` workflow
+
 ## v1.1.0 (2026-03-03)
 
 ### Added
