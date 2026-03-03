@@ -1,5 +1,17 @@
 # Release Notes
 
+## v1.2.2 (2026-03-03)
+
+### Added
+- **Per-run Stripe CLI confirmation** (autonomous-tests + swarm): Stripe-dependent suites now prompt user at Phase 5 start. Declining marks Stripe steps as "guided" without blocking other tests.
+- **Stripe operation allowlist** (autonomous-tests + swarm): Limits CLI to `stripe listen`, `stripe trigger`, and sandbox payment intents. Prohibits `--live`, account modifications, transfers, and payouts.
+- **System command allowlist** (autonomous-tests + swarm): Documents all non-config system commands (`which`, `git diff`, `date -u`, `python3 -c` hashlib, `ss -tlnp` for swarm port checks, etc.).
+- **External download scope** (autonomous-tests + swarm): Documents that Docker images come from user's compose files; no arbitrary downloads.
+- **Data access scope** (autonomous-tests + swarm): Documents all files read outside project root and confirms values are never logged.
+- **Trust boundaries** (autonomous-tests + swarm): Documents trust model — untrusted inputs gated by mandatory plan approval.
+- **Operational Bounds section** for autonomous-tests-swarm: Adds the full bounds section (previously missing from swarm) including Docker namespace scope, port management, and temp file constraints.
+- **Security Posture table** for autonomous-tests-swarm README: Adds scanner-visible security documentation matching autonomous-tests.
+
 ## v1.2.1 (2026-03-03)
 
 ### Added

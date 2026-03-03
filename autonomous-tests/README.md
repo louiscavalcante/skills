@@ -221,6 +221,11 @@ The skill enforces explicit operational bounds to constrain resource usage and p
 | Credential handling | Env var references only — raw values forbidden, redacted on display |
 | MCP activation | Only `safe: true` MCPs — `safe: false` are never activated |
 | Agent lifecycle | One suite per agent — spawned, executes, shut down |
+| Stripe CLI | Sandbox only — blocked on live keys, per-run confirmation, operation allowlist |
+| System commands | Explicit allowlist — only read-only/idempotent commands beyond user config |
+| External downloads | Docker images from user's compose files only — no arbitrary downloads |
+| Data access | `settings.json` and `.env` for safety checks only — values never logged or output |
+| Trust boundaries | Untrusted inputs (diffs, docs) gated by mandatory plan approval before execution |
 
 ### Capabilities Detection
 

@@ -206,6 +206,25 @@ Unlike `autonomous-tests`, swarm agents don't need shared test credentials. Each
 
 This eliminates credential conflicts entirely.
 
+### Security Posture
+
+The skill enforces explicit operational bounds to constrain resource usage and prevent unsafe operations:
+
+| Bound | Limit |
+|---|---|
+| Max agents | Equal to approved test suites, capped at `maxAgents` (default 5) |
+| Max fix cycles | 3 per suite |
+| Health check timeout | 60 seconds per service, 2 attempts |
+| Command execution | Only commands from user-approved config — no dynamic shell generation |
+| Docker scope | Local containers only — aborts on production indicators, namespaced compose projects |
+| MCP activation | Only `safe: true` MCPs — `safe: false` are never activated |
+| Agent lifecycle | One suite per agent — start env, execute, teardown, shut down |
+| Stripe CLI | Sandbox only — blocked on live keys, per-run confirmation, operation allowlist |
+| System commands | Explicit allowlist — only read-only/idempotent commands beyond user config |
+| External downloads | Docker images from user's compose files only — no arbitrary downloads |
+| Data access | `settings.json` and `.env` for safety checks only — values never logged or output |
+| Trust boundaries | Untrusted inputs (diffs, docs) gated by mandatory plan approval before execution |
+
 [Back to top](#autonomous-tests-swarm)
 
 ## Output
