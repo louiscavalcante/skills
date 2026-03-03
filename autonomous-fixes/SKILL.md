@@ -75,6 +75,7 @@ This skill reuses `.claude/autonomous-tests.json` — no separate config file.
 5. **Ensure `documentation.fixResults`**: if missing, add `"fixResults": "docs/_autonomous/fix-results"` to the config and save.
 6. **Ensure `userContext.credentialType`**: if `userContext.testCredentials` exists but `userContext.credentialType` is missing or empty, prompt the user for each credential role: "Is `{role-name}` **token-based** (API key, JWT — stateless, parallel-safe) or **session-based** (cookie, login — stateful, sequential-only)?" Save answers to `userContext.credentialType`. This determines whether fix agents can run in parallel with a single credential. Only prompt once — skip if `credentialType` already has entries for all credential roles.
 7. **Re-stamp config trust**: if the config was modified during steps 5 or 6 (e.g., added `fixResults` or `credentialType`), re-compute the SHA-256 hash and write it to the trust store. This prevents false "config changed" warnings on the next run of any skill. Use the same hash computation as step 4.
+8. **CLAUDE.md deep scan**: Discover all CLAUDE.md files up to 3 directory levels deep from the project root (`find . -maxdepth 3 -name "CLAUDE.md" -type f 2>/dev/null`), plus `~/.claude/CLAUDE.md` (global) and `.claude/CLAUDE.md` (local). Cache the discovered file list for use in Phase 2 (Fix Context Document enrichment). These files provide service-specific architecture context (e.g., `backend/CLAUDE.md` may document model definitions, API patterns, or serialization conventions relevant to the fix).
 
 **Step 2: Findings Scan**
 
@@ -130,12 +131,15 @@ If no argument pre-selects items (empty args or default), present findings via `
 
 This ensures that when context is cleared after plan approval, the executing agent can fully reconstruct the session state.
 
+**Setup delegation**: When 3+ items are selected for fixing, the orchestrator SHOULD spawn a setup agent (a `general-purpose` agent with `model: "opus"` and `team_name`) to read all source files referenced by the selected findings, compile the Fix Context Documents, and report them back via `SendMessage`. This frees the main agent's context window for orchestration. The setup agent also reads all discovered CLAUDE.md files (deep scan) for architecture context. The setup agent is shut down after reporting. For 1-2 items, the orchestrator may prepare context directly.
+
 **For each selected item**, read the relevant source code and build a **Fix Context Document**:
 
-1. Read the files referenced in the finding (endpoint files, model files, test files)
-2. Trace the code path: input → processing → output
-3. Identify the root cause (not just the symptom)
-4. Design the fix
+1. **Verify the finding still reproduces**: re-read the source files referenced in the finding and confirm the reported issue is present in the current code. If the code has changed since the finding was reported (e.g., another developer fixed it, or a prior fix cycle addressed it), mark the item as `Status: ALREADY_RESOLVED` and skip it
+2. Read the files referenced in the finding (endpoint files, model files, test files)
+3. Trace the code path: input → processing → output
+4. Identify the root cause (not just the symptom)
+5. Design the fix
 
 **Vulnerability items (V-prefix) get enhanced context**:
 - Trace full input → processing → output path for the affected endpoint/handler

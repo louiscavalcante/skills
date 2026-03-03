@@ -1,5 +1,19 @@
 # Release Notes
 
+## v1.4.0 (2026-03-03)
+
+### Added
+- **Finding verification before reporting** (autonomous-tests + swarm): Agents must read source code to confirm findings reflect real application behavior before reporting. Prevents false positives from synthetic test data artifacts.
+- **Deep CLAUDE.md scanning** (all three skills): Discovers CLAUDE.md files up to 3 levels deep from project root. Subdirectory files provide service-specific setup, architecture, and environment context.
+- **Setup agent delegation** (all three skills): Orchestrator spawns a dedicated setup agent for environment preparation and source file reading before suite/fix agents start. Reduces main agent context usage.
+
+### Changed
+- **Anomaly detection** and **API Response Security** require source verification before reporting
+- **autonomous-fixes Phase 2**: Explicit step to verify findings still reproduce before fixing
+- **System command allowlist** includes `find` for CLAUDE.md deep scan
+- **Data access scope** documents CLAUDE.md deep scan
+- **Max agents bounds** account for setup agent
+
 ## v1.3.0 (2026-03-03)
 
 ### Added
