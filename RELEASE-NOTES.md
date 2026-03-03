@@ -1,5 +1,18 @@
 # Release Notes
 
+## v1.2.1 (2026-03-03)
+
+### Added
+- **Autonomous seeding** as recommended default: agents create test data per suite via API/DB endpoints instead of requiring a global seed command. Configurable via `database.seedStrategy` (`autonomous` or `command`). Existing configs without `seedStrategy` default to `autonomous` with a user notification on next run.
+- **Browser test enforcement**: Agents can no longer skip browser-based test suites. Explicit priority chain: `agent-browser` (primary) → Playwright (fallback) → Direct HTTP (last resort). Each agent's task description now includes available browser tools and the `agent-browser` workflow.
+- **Operational Bounds section** in SKILL.md: Documents explicit resource limits, command execution scope, Docker scope, credential scope, MCP scope, and agent lifecycle constraints — addressing security scanner alerts on Docker orchestration and multi-agent spawning.
+- **Audit summary** in Phase 5: After all agents complete, logs number of agents spawned, suites executed, total docker exec commands run, and cleanup verification status.
+
+### Changed
+- **First-run setup** now presents "Autonomous seeding (Recommended)" as the default option, with "Global seed command" as alternative
+- **Execution flow** updated: `autonomous` seed strategy instructs agents to create test data using API/DB with `testDataPrefix`; `command` strategy runs `database.seedCommand` globally (existing behavior)
+- **Security rules hardened**: No dynamic command generation or shell string concatenation at runtime; credential values (including env var names) excluded from Bash output and agent task descriptions
+
 ## v1.2.0 (2026-03-03)
 
 ### Added

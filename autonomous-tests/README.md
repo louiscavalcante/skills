@@ -162,7 +162,7 @@ On first run, the skill creates `.claude/autonomous-tests.json` in your project 
 |---|---|
 | `project` | Root path, name, topology, services with start/health/log commands |
 | `relatedProjects` | Sibling repos that are part of the same system |
-| `database` | Type, connection command, test DB name, seed/migration/cleanup commands |
+| `database` | Type, seed strategy, connection command, test DB name, seed/migration/cleanup commands |
 | `externalServices` | Third-party integrations with sandbox checks and production indicators |
 | `testing` | Unit test command, test data prefix, context files |
 | `documentation` | Output paths for each report type |
@@ -170,6 +170,17 @@ On first run, the skill creates `.claude/autonomous-tests.json` in your project 
 | `capabilities` | Auto-detected testing tools (Docker MCPs, agent-browser, Playwright, Stripe CLI) |
 
 See [`references/config-schema.json`](references/config-schema.json) for the full schema.
+
+### Database Seeding
+
+The skill supports two seeding strategies, configured via `database.seedStrategy`:
+
+| Strategy | How It Works | Best For |
+|---|---|---|
+| `autonomous` (recommended) | Each agent creates the test data it needs for its suite via API calls, direct DB inserts, or application endpoints. Data is prefixed with `testDataPrefix`. | Most projects — isolated, parallel-safe, no shared seed state |
+| `command` | Runs `database.seedCommand` globally before tests start. | Projects with complex seed data that must exist before any test runs |
+
+On first run, the skill presents both options and recommends `autonomous`. Existing configs without `seedStrategy` default to `autonomous`.
 
 ### Credential Safety
 
@@ -195,6 +206,21 @@ The skill redacts credential values when displaying configs for review.
 ### Config Trust Store
 
 Configs are verified against a trust store at `~/.claude/trusted-configs/`. When a config is created or approved, its hash is saved outside the repo. If the config is modified (e.g., by a commit from another contributor), you'll be prompted to re-approve before tests run. This prevents a malicious config from bypassing approval.
+
+### Security Posture
+
+The skill enforces explicit operational bounds to constrain resource usage and prevent unsafe operations:
+
+| Bound | Limit |
+|---|---|
+| Max agents | Equal to approved test suites |
+| Max fix cycles | 3 per suite |
+| Health check timeout | 30 seconds per service |
+| Command execution | Only commands from user-approved config — no dynamic shell generation |
+| Docker scope | Local containers only — aborts on production indicators |
+| Credential handling | Env var references only — raw values forbidden, redacted on display |
+| MCP activation | Only `safe: true` MCPs — `safe: false` are never activated |
+| Agent lifecycle | One suite per agent — spawned, executes, shut down |
 
 ### Capabilities Detection
 

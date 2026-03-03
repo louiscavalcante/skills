@@ -95,6 +95,7 @@ Schema reference: `references/config-schema.json`.
 
 1. Read `.claude/autonomous-tests.json`
 2. **Validate config version**: check that `version` equals `4` and that the required fields (`project`, `database`, `testing`) exist. If `version` is `3`, perform **v3→v4 migration**: add an empty `capabilities` section (with `lastScanned: null`), bump `version` to `4`, inform the user: "Config migrated from v3 to v4. Capabilities will be scanned on this run." Then continue with the capabilities scan in Step 1 above. If version is less than `3` or required fields are missing, warn the user and re-run the first-run setup below instead.
+   **Ensure `database.seedStrategy`**: if the `database` section exists but `seedStrategy` is missing, default to `"autonomous"` and inform the user: "Seed strategy defaulted to `autonomous` — agents will create their own test data per suite. Run with `seedStrategy: \"command\"` in config to use a global seed command instead."
    **Ensure `documentation.fixResults`**: if the `documentation` section exists but `fixResults` is missing, add `"fixResults": "docs/_autonomous/fix-results"` as the default path. This enables the autonomous-fixes loop.
    **Ensure `userContext.credentialType`**: if `userContext.testCredentials` exists but `userContext.credentialType` is missing or empty, prompt the user for each credential role: "Is `{role-name}` **token-based** (API key, JWT — stateless, parallel-safe) or **session-based** (cookie, login — stateful, sequential-only)?" Save answers to `userContext.credentialType`. This determines whether agents can run in parallel with a single credential. Only prompt once — skip if `credentialType` already has entries for all credential roles.
 3. **Verify config trust**: compute a SHA-256 hash of the config content (excluding the `_configHash`, `lastRun`, and `capabilities` fields) by running: `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"`. Then check if this hash exists in the **trust store** at `~/.claude/trusted-configs/` (the trust file is named after a hash of the project root: `python3 -c "import hashlib,os;print(hashlib.sha256(os.path.realpath('.').encode()).hexdigest()[:16])"` + `.sha256`). If the trust file is missing or its content doesn't match the computed hash, the config has not been approved by this user — **show the config to the user for confirmation, but redact all values in `userContext.testCredentials`** — display only the role names (keys) with values replaced by `"********"`. Never output raw credential values, env var references, or descriptions from this field. This prevents accidental exposure even if raw secrets were stored in the config. Use `AskUserQuestion` to prompt for approval — the hook ensures this prompt is always shown even in `dontAsk` or bypass mode. If confirmed, write the new hash to the trust store file (`mkdir -p ~/.claude/trusted-configs/` first). This prevents a malicious config committed to a repo from bypassing approval, since the trust store lives outside the repo in the user's home directory.
@@ -107,7 +108,10 @@ Schema reference: `references/config-schema.json`.
 
 ### If output is `CONFIG_MISSING` (first run only):
 
-1. **Auto-extract** from CLAUDE.md files + compose files + env files + package manifests. Auto-detect and propose `database.seedCommand`, `database.migrationCommand`, and `database.cleanupCommand` by scanning compose files, `scripts/` directories, Makefiles, and package.json scripts. Common patterns: `manage.py migrate`, `manage.py seed_test_data`, `npx prisma migrate deploy`, `npx prisma db seed`, `knex migrate:latest`, `knex seed:run`.
+1. **Auto-extract** from CLAUDE.md files + compose files + env files + package manifests. Auto-detect and propose `database.migrationCommand` and `database.cleanupCommand` by scanning compose files, `scripts/` directories, Makefiles, and package.json scripts. Common patterns: `manage.py migrate`, `npx prisma migrate deploy`, `knex migrate:latest`. Also detect potential seed commands (`manage.py seed_test_data`, `npx prisma db seed`, `knex seed:run`, etc.) for use if the user chooses the `command` strategy.
+   **Seeding strategy**: After auto-detection, present via `AskUserQuestion`:
+   - **Option 1**: "Autonomous seeding (Recommended)" — each agent creates the test data it needs for its specific test suite via API calls, direct DB inserts, or the application's endpoints. No global seed command needed. Set `database.seedStrategy` to `"autonomous"`.
+   - **Option 2**: "Global seed command" — run a predefined command before tests (show auto-detected suggestions). Set `database.seedStrategy` to `"command"` and save the chosen command to `database.seedCommand`.
    **Database type detection**: Explicitly detect by checking both MongoDB and SQL indicators:
    - **MongoDB**: `mongosh`/`mongo` binaries, `mongoose`/`mongodb`/`@typegoose` packages, connection strings (`mongodb://`, `MONGO_URI`, `MONGODB_URL`), `mongo`/`mongodb` containers in compose files
    - **SQL**: `psql`/`mysql`/`sqlite3` binaries, `pg`/`mysql2`/`sequelize`/`prisma`/`knex`/`typeorm`/`drizzle`/`sqlalchemy`/`django.db` packages, `DATABASE_URL` with `postgres://`/`mysql://`/`sqlite:///`, `postgres`/`mysql`/`mariadb` containers in compose files
@@ -215,9 +219,15 @@ Use `TeamCreate` to create a test team. Spawn `general-purpose` Agents as teamma
 
 **Cascading context — CRITICAL**: Every agent MUST receive the full **Feature Context Document** from Phase 3 in its task description. This includes: all features touched, all endpoints, all DB collections affected, all external services involved, all identified edge cases, prior test history, and available capabilities. Agents need this complete picture to understand cross-feature side-effects (e.g., testing endpoint A may break endpoint B's state).
 
-**Capability-aware execution**: Agents should leverage detected capabilities from config when relevant to their test suite. **Priority for web/frontend testing: agent-browser > Playwright** — always prefer `agent-browser` when available; only fall back to Playwright if agent-browser is unavailable or unsuitable for the specific test:
-- Use `agent-browser` **first** if `frontendTesting.agentBrowser` is true and the suite involves UI testing, browser-based verification, or any web interaction
-- Use Playwright **only as fallback** if `frontendTesting.playwright` is true and agent-browser is not available
+**Capability-aware execution**: Agents MUST leverage detected capabilities from config when relevant to their test suite.
+
+**CRITICAL — NEVER skip test suites that involve browser interaction.** Agents MUST attempt browser-based tests using available tools in this priority order:
+
+1. **`agent-browser` (PRIMARY)** if `frontendTesting.agentBrowser` is true — use `agent-browser open <url>` → `agent-browser snapshot -i` → `agent-browser click/fill @ref` → re-snapshot after changes
+2. **Playwright (FALLBACK)** only if `agent-browser` is unavailable or errors for the specific test
+3. **Direct HTTP/API (LAST RESORT)** if both are unavailable — attempt via curl/fetch, mark remaining untestable parts as "guided"
+
+Skipping a browser test without attempting these tools is **PROHIBITED**.
 - Use `mcp-add` to activate Docker MCPs from `dockerMcps` that are marked `safe: true` and relevant to the test needs (e.g., a Stripe sandbox MCP for payment tests)
 - Use Stripe CLI if `stripeCli.available` is true and `stripeCli.blocked` is false for webhook forwarding, payment intent testing, or event simulation
 - **NEVER** activate MCPs where `safe: false` — these may be production or unknown-mode services
@@ -259,11 +269,14 @@ Use `TeamCreate` to create a test team. Spawn `general-purpose` Agents as teamma
 Each finding must be categorized by: **Severity**, **Regulatory impact** (which laws apply), **Exploitability** (how easily an attacker can leverage it), **Compliance risk** (legal/financial exposure). All API response security findings go into the `### API Response Security` subsection of `## Issues Found` in test-results documentation.
 
 **Execution flow**:
-1. Create tasks for each suite via `TaskCreate` — include: env details from config, exact test steps, verification queries, teardown instructions, the full Feature Context Document, the **role name** of the assigned credential, and **database lifecycle commands**:
-   - **Pre-test**: if `database.migrationCommand` exists, run migrations first. If `database.seedCommand` exists, seed test data after migrations.
+1. Create tasks for each suite via `TaskCreate` — include: env details from config, exact test steps, verification queries, teardown instructions, the full Feature Context Document, the **role name** of the assigned credential, available browser tools and their status from config capabilities, and **database lifecycle commands**:
+   - **Pre-test**: if `database.migrationCommand` exists, run migrations first. Then apply the seeding strategy:
+     - If `database.seedStrategy` is `"autonomous"` (or missing — the default): task description instructs the agent to "create all necessary test data for your suite using API endpoints or direct DB operations, prefixed with `testDataPrefix`, before running tests. Do not rely on pre-existing data."
+     - If `database.seedStrategy` is `"command"`: run `database.seedCommand` after migrations (existing behavior).
    - **Verification**: include `database.connectionCommand` for verification queries during and after tests.
    - **Post-test**: if `database.cleanupCommand` exists, clean database state after suite execution. If no `cleanupCommand`, clean only data identified by `testDataPrefix`.
-   - Agents execute in order: migrate → seed → test → cleanup.
+   - Agents execute in order: migrate → seed (autonomous or command) → test → cleanup.
+   - **Browser tools**: include the `agent-browser` workflow (`open <url>` → `snapshot -i` → `click/fill @ref` → re-snapshot after changes) and the browser tool priority chain. Explicitly state: "Do NOT skip this suite because it involves browser testing — use `agent-browser` as your primary browser tool."
 2. Assign tasks to agents via `TaskUpdate` with `owner`
 3. For **parallel** execution (distinct credentials or token-based): create one task per suite and assign to separate agents. For **sequential** execution (single session-based credential): create **one task per suite** via `TaskCreate` (each task includes its suite steps, verification queries, database lifecycle commands, the full Feature Context Document, and the role name of the assigned credential). Then execute suites one at a time:
    - Spawn ONE `general-purpose` agent with `model: "opus"` and `team_name`
@@ -275,6 +288,7 @@ Each finding must be categorized by: **Severity**, **Regulatory impact** (which 
    - Never execute test suites in the main conversation
 4. Report PASS/FAIL after each suite completes, including any anomalies detected
 5. After all suites complete, shut down teammates via `SendMessage` with `type: "shutdown_request"`
+6. **Audit summary**: After all agents complete, log to the test-results doc: number of agents spawned, suites executed, total docker exec commands run, and cleanup verification status
 
 ## Phase 6 — Fix Cycle
 
@@ -322,3 +336,19 @@ After all phases complete, display this message prominently:
 - Never use Stripe CLI when `stripeCli.blocked` is true — live keys are configured
 - Capabilities are auto-detected — never ask the user to manually configure them
 - When reading `_autonomous/` history, read only Summary and Issues Found sections — never read full historical documents
+- Never generate, concatenate, or interpolate shell commands at runtime — only execute commands defined verbatim in the user-approved config
+- Never log, print, or include credential values (even env var names from testCredentials) in Bash command output or agent task descriptions — pass only role names
+
+## Operational Bounds
+
+These bounds constrain resource usage and are enforced throughout execution:
+
+- **Max agents**: Equal to the number of approved test suites (bounded by user-approved plan)
+- **Max fix cycles**: 3 per suite (Phase 6)
+- **Health check timeout**: 30 seconds per service (Phase 2)
+- **Capability cache TTL**: `rescanThresholdDays` from config (default 7 days)
+- **Command execution scope**: Only commands defined in user-approved config — no dynamic command generation or shell string concatenation
+- **Docker scope**: Local containers only — Phase 1 aborts on any production indicator
+- **Credential scope**: Env var references only — raw values forbidden in config, redacted on display, excluded from documentation output
+- **MCP scope**: Only MCPs marked `safe: true` can be activated — `safe: false` MCPs are never activated
+- **Agent lifecycle**: Each agent is spawned, executes one suite, and is shut down — no persistent or long-lived agents
