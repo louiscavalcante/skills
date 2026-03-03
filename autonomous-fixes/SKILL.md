@@ -73,6 +73,7 @@ This skill reuses `.claude/autonomous-tests.json` — no separate config file.
 3. Read the config. Validate `version` equals `4`.
 4. **Verify config trust**: compute SHA-256 hash (same method as autonomous-tests) and check against `~/.claude/trusted-configs/`. If untrusted, show config for confirmation (redact `testCredentials` values).
 5. **Ensure `documentation.fixResults`**: if missing, add `"fixResults": "docs/_autonomous/fix-results"` to the config and save.
+6. **Ensure `userContext.credentialType`**: if `userContext.testCredentials` exists but `userContext.credentialType` is missing or empty, prompt the user for each credential role: "Is `{role-name}` **token-based** (API key, JWT — stateless, parallel-safe) or **session-based** (cookie, login — stateful, sequential-only)?" Save answers to `userContext.credentialType`. This determines whether fix agents can run in parallel with a single credential. Only prompt once — skip if `credentialType` already has entries for all credential roles.
 
 **Step 2: Findings Scan**
 
