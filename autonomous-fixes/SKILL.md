@@ -267,6 +267,7 @@ Priority order (highest risk first):
 - Never expose credentials, keys, or tokens in documentation output
 - Always enter plan mode before executing fixes (Phase 2)
 - Always delegate fixes to Agent Teams — never fix in main conversation
+- **NEVER use the `Agent` tool directly for execution. ALWAYS use `TeamCreate` → `TaskCreate` → spawn agents with `team_name` parameter → `TaskUpdate` → `SendMessage`. Plain `Agent` calls bypass team coordination and task tracking. The `Agent` tool without `team_name` is PROHIBITED during Phase 3.**
 - Always spawn agents with `model: "opus"` for maximum reasoning capability
 - Always present findings for user selection before reading source code (Phase 1 before Phase 2)
 - AskUserQuestion hook ensures user selection even in dontAsk/bypass mode

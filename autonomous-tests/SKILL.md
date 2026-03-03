@@ -281,6 +281,7 @@ Remove only test data created during this run (identified by `testDataPrefix` fr
 - Never expose credentials, keys, or tokens in documentation output
 - Always enter plan mode before executing tests (Phase 4)
 - Always delegate test suites to Agent Teams — never run tests in main conversation
+- **NEVER use the `Agent` tool directly for execution. ALWAYS use `TeamCreate` → `TaskCreate` → spawn agents with `team_name` parameter → `TaskUpdate` → `SendMessage`. Plain `Agent` calls bypass team coordination and task tracking. The `Agent` tool without `team_name` is PROHIBITED during Phases 5-6.**
 - Always spawn agents with `model: "opus"` for maximum reasoning capability
 - Be idempotent — skip or reset cleanly if test data already exists
 - Treat ALL external APIs with care — add delays between calls, use sandbox/test modes, minimize unnecessary requests
