@@ -108,13 +108,13 @@ Schema reference: `references/config-schema.json`.
 2. **Validate config version**: check that `version` equals `5` and that the required fields (`project`, `database`, `testing`) exist. If `version` is `4`, perform **v4→v5 migration**: check for any legacy service-specific CLI fields under `capabilities` (e.g., fields matching `*Cli` pattern) → for each, find or create a matching `externalServices[]` entry → populate its `cli` sub-object (`tool`, `available`, `mode`, `blocked` from the legacy values, `allowedOperations` and `prohibitedFlags` from the catalog) → set `source: "auto-detected"` → remove the legacy field from `capabilities` → bump `version` to `5`. Inform the user: "Config migrated from v4 to v5. External service CLIs are now managed via `externalServices[].cli`." If `version` is `3`, perform **v3→v4→v5 migration**: first add an empty `capabilities` section (with `lastScanned: null`), then apply the v4→v5 migration above. If version is less than `3` or required fields are missing, warn the user and re-run the first-run setup below instead.
    **Ensure `database.seedStrategy`**: if the `database` section exists but `seedStrategy` is missing, default to `"autonomous"` and inform the user: "Seed strategy defaulted to `autonomous` — agents will create their own test data per suite. Run with `seedStrategy: \"command\"` in config to use a global seed command instead."
    **Ensure `documentation.fixResults`**: if the `documentation` section exists but `fixResults` is missing, add `"fixResults": "docs/_autonomous/fix-results"` as the default path. This enables the autonomous-fixes loop.
-   **Ensure `userContext.credentialType`**: if `userContext.testCredentials` exists but `userContext.credentialType` is missing or empty, prompt the user for each credential role: "Is `{role-name}` **token-based** (API key, JWT — stateless, parallel-safe) or **session-based** (cookie, login — stateful, sequential-only)?" Save answers to `userContext.credentialType`. This determines whether agents can run in parallel with a single credential. Only prompt once — skip if `credentialType` already has entries for all credential roles.
+   **Clean up legacy `credentialType`**: if `userContext.credentialType` exists, delete it silently — this field is no longer used (execution is always sequential).
 3. **Verify config trust**: compute a SHA-256 hash of the config content (excluding the `_configHash`, `lastRun`, and `capabilities` fields) by running: `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"`. Then check if this hash exists in the **trust store** at `~/.claude/trusted-configs/` (the trust file is named after a hash of the project root: `python3 -c "import hashlib,os;print(hashlib.sha256(os.path.realpath('.').encode()).hexdigest()[:16])"` + `.sha256`). If the trust file is missing or its content doesn't match the computed hash, the config has not been approved by this user — **show the config to the user for confirmation, but redact all values in `userContext.testCredentials`** — display only the role names (keys) with values replaced by `"********"`. Never output raw credential values, env var references, or descriptions from this field. This prevents accidental exposure even if raw secrets were stored in the config. Use `AskUserQuestion` to prompt for approval — the hook ensures this prompt is always shown even in `dontAsk` or bypass mode. If confirmed, write the new hash to the trust store file (`mkdir -p ~/.claude/trusted-configs/` first). This prevents a malicious config committed to a repo from bypassing approval, since the trust store lives outside the repo in the user's home directory.
 4. **Testing priorities prompt**: Show the current `userContext.testingPriorities` from config (or "None set" if empty/missing). Use `AskUserQuestion` to ask: "Any pain points or testing priorities for this run?" Present the current priorities for reference and offer options including "None" to clear any cached priorities. If the user provides new priorities, replace `userContext.testingPriorities` in config. If the user selects "None", set `userContext.testingPriorities` to an empty array `[]` — this clears stale priorities so agents start fresh. If the user keeps existing priorities, no change needed. Updated priorities are cascaded to agents via the Feature Context Document in Phase 5.
 5. Re-scan for new services and update config if needed
 6. Get current UTC time by running `date -u +"%Y-%m-%dT%H:%M:%SZ"` in Bash, then update `lastRun` with that exact value (never guess the time)
 7. If `userContext` is missing or all arrays are empty, run the **User Context Questionnaire** below once, then save answers to config
-8. **Re-stamp config trust**: if the config was modified during any of the steps above (steps 2, 4, 5, or 7 — e.g., added `fixResults`, `credentialType`, updated priorities, updated services), re-compute the hash and write it to the trust store. This prevents false "config changed" warnings on the next run. Use the same hash computation as step 3.
+8. **Re-stamp config trust**: if the config was modified during any of the steps above (steps 2, 4, 5, or 7 — e.g., added `fixResults`, removed legacy `credentialType`, updated priorities, updated services), re-compute the hash and write it to the trust store. This prevents false "config changed" warnings on the next run. Use the same hash computation as step 3.
 9. **Skip to Phase 1** — do NOT run first-run steps below
 
 ### If output is `CONFIG_MISSING` (first run only):
@@ -136,10 +136,9 @@ Schema reference: `references/config-schema.json`.
 5. **User Context Questionnaire** — present all questions at once, accept partial answers:
    - Any known flaky areas or intermittent failures?
    - Test user credentials to use (reference env var names or role names, never raw values)?
-   - For each credential: is it **token-based** (API key, JWT — stateless, parallel-safe) or **session-based** (cookie, login — stateful, sequential-only)? Default: session.
    - Any specific testing priorities or focus areas?
    - Any additional notes for the test runner?
-   Store answers in the `userContext` section of the config. Store credential type answers in `userContext.credentialType` (e.g., `{"admin": "token", "member": "session"}`).
+   Store answers in the `userContext` section of the config.
 6. **Propose config** → STOP and wait for user to confirm → write config
 7. **Stamp config trust**: after writing, compute the config hash with `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"` and write the result to the trust store at `~/.claude/trusted-configs/{project-hash}.sha256` (create the directory if needed). This marks the config as user-approved in a location outside the repo that cannot be forged by a committed file.
 8. If project CLAUDE.md < 140 lines and lacks startup instructions, append max 10 lines.
@@ -195,7 +194,6 @@ All identification is fully autonomous — derive everything from the code diff 
 - Any related project paths involved
 - Key findings from Phase 3 (affected modules, endpoints, dependencies)
 - The `userContext` from config (flaky areas, testing priorities, notes)
-- Credential assignment plan for agent teams (see Phase 5)
 
 This ensures that when context is cleared after plan approval, the executing agent can fully reconstruct the session state.
 
@@ -224,9 +222,9 @@ Each suite needs: name, objective, pre-conditions, steps with expected outcomes,
 
 ## Phase 5 — Execution (Agent Teams)
 
-Use `TeamCreate` to create a test team. Spawn `general-purpose` Agents as teammates — one per approved suite. **Always use `model: "opus"` when spawning agents** (Opus 4.6 has adaptive reasoning/thinking built-in — no budget to configure, it thinks as deeply as needed automatically). Coordinate via `TaskCreate`/`TaskUpdate` and `SendMessage`.
+Use `TeamCreate` to create a test team. Spawn `general-purpose` Agents as teammates — one at a time, sequentially. **Always use `model: "opus"` when spawning agents** (Opus 4.6 has adaptive reasoning/thinking built-in — no budget to configure, it thinks as deeply as needed automatically). Coordinate via `TaskCreate`/`TaskUpdate` and `SendMessage`.
 
-**Credential sharing — CRITICAL**: Assign each agent a **distinct test credential** from `userContext.testCredentials` to prevent session conflicts (e.g., one agent logging in invalidates another's token). Check `userContext.credentialType` for each role — `"token"` means stateless (API key, JWT) and is parallel-safe even with a single credential; `"session"` (or absent — the default) means stateful (cookie, login session) and requires sequential execution if shared. If only one credential exists **and** its type is `"session"` (or unset), run agents **sequentially** — never in parallel with shared session-based auth. If only one credential exists but its type is `"token"`, agents may run in **parallel** since token-based auth is stateless and concurrent use does not cause conflicts. Include only the **role name** (key from `testCredentials`) in each agent's task description — never the credential value or env var reference. Each agent must resolve its assigned credential by reading the config file or environment at runtime.
+**Credential assignment**: Assign each agent a role name from `userContext.testCredentials`. If multiple roles exist, rotate across suites (e.g., suite 1 gets "admin", suite 2 gets "member", suite 3 gets "admin" again). Sequential execution prevents credential conflicts regardless of credential type. Include only the **role name** (key from `testCredentials`) in each agent's task description — never the credential value or env var reference. Each agent must resolve its assigned credential by reading the config file or environment at runtime.
 
 **Cascading context — CRITICAL**: Every agent MUST receive the full **Feature Context Document** from Phase 3 in its task description. This includes: all features touched, all endpoints, all DB collections affected, all external services involved, all identified edge cases, prior test history, and available capabilities. Agents need this complete picture to understand cross-feature side-effects (e.g., testing endpoint A may break endpoint B's state).
 
@@ -299,7 +297,7 @@ Each verified finding must be categorized by: **Severity**, **Regulatory impact*
    - Agents execute in order: migrate → seed (autonomous or command) → test → cleanup.
    - **Browser tools**: include the `agent-browser` workflow (`open <url>` → `snapshot -i` → `click/fill @ref` → re-snapshot after changes) and the browser tool priority chain. Explicitly state: "Do NOT skip this suite because it involves browser testing — use `agent-browser` as your primary browser tool."
 2. Assign tasks to agents via `TaskUpdate` with `owner`
-3. For **parallel** execution (distinct credentials or token-based): create one task per suite and assign to separate agents. For **sequential** execution (single session-based credential): create **one task per suite** via `TaskCreate` (each task includes its suite steps, verification queries, database lifecycle commands, the full Feature Context Document, and the role name of the assigned credential). Then execute suites one at a time:
+3. Execute suites **sequentially** — one at a time:
    - Spawn ONE `general-purpose` agent with `model: "opus"` and `team_name`
    - Assign it the first suite task via `TaskUpdate` with `owner`
    - When the agent completes and marks the task done, shut it down via `SendMessage` with `type: "shutdown_request"`
@@ -350,7 +348,7 @@ After all phases complete, display this message prominently:
 - Always spawn agents with `model: "opus"` for maximum reasoning capability
 - Be idempotent — skip or reset cleanly if test data already exists
 - Treat ALL external APIs with care — add delays between calls, use sandbox/test modes, minimize unnecessary requests
-- Never share auth tokens/sessions between agents — assign distinct credentials or run sequentially (see Phase 5)
+- Execution is always sequential — one agent at a time, preventing credential conflicts and log cross-contamination
 - If no unit tests exist → note in report, do not treat as a failure
 - Use UTC timestamps everywhere (docs, config, logs) — always obtain from `date -u`, never guess
 - Never activate Docker MCPs where `safe: false` — these may be production or unknown-mode services

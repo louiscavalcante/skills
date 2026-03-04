@@ -2,7 +2,7 @@
 
 Project-agnostic autonomous E2E test runner for Claude Code.
 
-Analyzes your code changes (and optional doc file references), auto-detects available testing tools, learns from previous test runs, generates a test plan for your approval, then executes end-to-end tests in parallel using Agent Teams — all against your local stack. Produces structured markdown reports and cleans up after itself.
+Analyzes your code changes (and optional doc file references), auto-detects available testing tools, learns from previous test runs, generates a test plan for your approval, then executes end-to-end tests sequentially using Agent Teams — all against your local stack. Produces structured markdown reports and cleans up after itself.
 
 ## Table of Contents
 
@@ -30,7 +30,7 @@ Analyzes your code changes (and optional doc file references), auto-detects avai
 - **Learns from past runs** by scanning `_autonomous/` history for related test results and known issues
 - **Traces dependency graphs** across files and related projects to understand blast radius
 - **Generates a test plan** covering happy paths, edge cases, race conditions, security, and more — with mandatory human approval before execution
-- **Executes test suites in parallel** via Agent Teams with capability-aware agents (one agent per suite)
+- **Executes test suites sequentially** via Agent Teams with capability-aware agents (one at a time)
 - **Produces structured markdown reports**: test results, pending fixes, guided tests, and queued autonomous tests
 - **Cleans up test data** using a configurable prefix, verifying a clean state before finishing
 
@@ -42,7 +42,7 @@ Analyzes your code changes (and optional doc file references), auto-detects avai
 | python3 | Config hashing, validation | `python3 --version` |
 | Docker + Compose | Service orchestration (typical) | `docker --version` |
 | git | Diff analysis | `git --version` |
-| Agent Teams flag | Parallel test execution | Setup script handles this |
+| Agent Teams flag | Agent team orchestration | Setup script handles this |
 
 ## Installation
 
@@ -61,7 +61,7 @@ bash ~/.claude/skills/louiscavalcante-skills/autonomous-tests/scripts/setup-hook
 The setup script configures four things in `~/.claude/settings.json`:
 1. **ExitPlanMode hook** — forces plan approval even in `dontAsk` mode
 2. **AskUserQuestion hook** — forces user prompts even in `dontAsk`/bypass mode
-3. **Agent Teams flag** — enables `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` for parallel execution
+3. **Agent Teams flag** — enables `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` for agent team orchestration
 4. **Model** — sets `claude-opus-4-6` as the default model (required for agent team reasoning capabilities)
 
 ### Manual Install
@@ -123,7 +123,7 @@ On first run, the skill auto-detects your project topology, services, and databa
 
 ### 4. Review & Execute
 
-The skill enters plan mode with a full test plan — review it and approve before anything executes. Tests run via Agent Teams (one agent per suite), and results land in `docs/_autonomous/`.
+The skill enters plan mode with a full test plan — review it and approve before anything executes. Tests run sequentially via Agent Teams (one agent at a time), and results land in `docs/_autonomous/`.
 
 [Back to top](#autonomous-tests)
 
@@ -308,7 +308,7 @@ Phase 1: Safety     ← Block if production detected
 Phase 2: Startup    ← Health-check and start services
 Phase 3: Discovery  ← Analyze diff, file refs, history
 Phase 4: Plan       ← Generate test plan (you approve)
-Phase 5: Execute    ← Agent Teams run suites in parallel
+Phase 5: Execute    ← Agent Teams run suites sequentially
 Phase 6: Fix        ← Auto-fix runtime issues, document bugs
 Phase 7: Docs       ← Generate markdown reports
 Phase 8: Cleanup    ← Remove test data, verify clean state
@@ -320,7 +320,7 @@ Phase 9: Advisory   ← Remind user to /clear before next skill
 - **Phase 2** health-checks each service and starts any that are down, including related projects.
 - **Phase 3** reads every changed file, processes `file:<path>` references if provided, builds a feature map (endpoints, DB ops, auth flows), traces the full dependency graph across project boundaries, and scans `_autonomous/` folders for prior test history related to current changes.
 - **Phase 4** enters plan mode with test suites covering happy paths, validation, idempotency, error handling, race conditions, security, and edge cases. You approve before anything executes.
-- **Phase 5** spawns one Agent Team member per suite. Each agent gets the full feature context (including prior history and available capabilities) and a distinct test credential. Agents leverage detected capabilities — agent-browser for UI tests, Playwright for frontend tests, safe Docker MCPs, and external service CLIs when not blocked.
+- **Phase 5** executes one suite at a time: spawns an Agent Team member, assigns it a suite, waits for completion, shuts it down, then spawns the next. Each agent gets the full feature context (including prior history and available capabilities) and an assigned test credential role. Sequential execution prevents credential conflicts and log cross-contamination. Agents leverage detected capabilities — agent-browser for UI tests, Playwright for frontend tests, safe Docker MCPs, and external service CLIs when not blocked.
 - **Phase 6** auto-fixes runtime issues (env vars, containers) up to 3 times. Code bugs are documented and shown to you.
 - **Phase 7** generates timestamped markdown reports from templates.
 - **Phase 8** removes test data by prefix, verifies cleanup with DB queries, and logs every action.
@@ -336,7 +336,7 @@ Phase 9: Advisory   ← Remind user to /clear before next skill
 | "Agent teams not enabled" | Missing feature flag | Run `bash scripts/setup-hook.sh` |
 | Config validation fails | Schema version mismatch | Delete `.claude/autonomous-tests.json`, re-run |
 | Services won't start | Docker not running | Check `docker info` |
-| Tests fail with auth errors | Shared credentials between agents | Add distinct test users per agent in config |
+| Tests fail with auth errors | Credential misconfiguration | Verify test credentials in config reference valid env vars |
 | Trust verification fails | Config modified externally | Re-approve when prompted |
 | "External service CLI blocked" | Production keys detected | Switch to sandbox/test keys for the affected service |
 | Capabilities seem stale | Cache older than threshold | Run `/autonomous-tests rescan` to force re-scan |

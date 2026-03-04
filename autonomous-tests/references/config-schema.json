@@ -80,9 +80,6 @@
     "testCredentials": {
       "role-name": "MUST be an env var name like $TEST_USER_PASSWORD — raw secret values are forbidden and will be redacted"
     },
-    "credentialType": {
-      "role-name": "token | session — token = stateless (API key, JWT), parallel-safe; session = stateful (cookie, login session), sequential-only. Default: session"
-    },
     "testingPriorities": ["description | null"],
     "notes": "free-form user notes | null"
   },

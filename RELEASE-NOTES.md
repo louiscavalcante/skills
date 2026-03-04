@@ -1,5 +1,17 @@
 # Release Notes
 
+## v1.7.0 (2026-03-04)
+
+### Changed
+- **Always-sequential execution** (autonomous-tests): Execution is now always sequential — one agent at a time, one suite at a time. Removes token/session credential type logic that determined parallel vs sequential execution. The `autonomous-tests-swarm/` skill handles true parallel execution with isolated Docker environments.
+- **Removed `credentialType` config field** (autonomous-tests): `userContext.credentialType` removed from config schema. Existing configs with `credentialType` are silently cleaned up on next run.
+- **Removed credential type prompting** (autonomous-tests): First-run questionnaire and returning-run ensure block no longer ask about token-based vs session-based credentials.
+- **Simplified credential assignment** (autonomous-tests): Agents receive role names from `userContext.testCredentials` directly, rotated across suites if multiple roles exist. Sequential execution prevents conflicts regardless of credential type.
+- **Phase 4 Context Reload** (autonomous-tests): Removed "Credential assignment plan" line — no longer needed with always-sequential execution.
+- **Phase 5 description** (README): Updated to describe sequential execution model — spawn agent, assign suite, wait, shut down, repeat.
+- **Troubleshooting** (README): "Shared credentials between agents" → "Credential misconfiguration" with updated fix guidance.
+- **Setup script** (autonomous-tests): "parallel test execution" → "agent team orchestration" in output messaging.
+
 ## v1.6.0 (2026-03-04)
 
 ### Added
