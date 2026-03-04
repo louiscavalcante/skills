@@ -75,6 +75,19 @@
       }
     },
     "tmpDir": "/tmp/autonomous-swarm-{sessionId}",
+    "resourceLimits": {
+      "memory": "512m | 1g | null — --memory flag per container. Default: null (no limit)",
+      "cpus": "0.5 | 1 | null — --cpus flag per container. Default: null (no limit)",
+      "readOnlyRootfs": "false — read-only rootfs with --read-only. Default: false. Requires tmpfsMounts for writable paths",
+      "tmpfsMounts": ["/tmp", "/var/run"],
+      "_defaults": "All null/false — resource limits are opt-in, not enforced by default"
+    },
+    "audit": {
+      "schemaVersion": "1.0",
+      "enabled": "true — per-agent structured audit logs. Default: true",
+      "logDir": "/tmp/autonomous-swarm-{sessionId}/audit/",
+      "_defaults": "Enabled by default, schemaVersion tracks audit JSON format evolution"
+    },
     "cleanup": {
       "removeVolumes": true,
       "removeOrphans": true
@@ -85,6 +98,8 @@
     "{port}": "assigned host port for that service",
     "{backendPort}": "assigned host port for the backend service (primary compose stack)",
     "{containerName}": "swarm-{N}-{service} — container name",
-    "{sessionId}": "unique session identifier (timestamp-based, from date -u +%Y%m%d%H%M%S)"
+    "{sessionId}": "unique session identifier (timestamp-based, from date -u +%Y%m%d%H%M%S)",
+    "{auditDir}": "/tmp/autonomous-swarm-{sessionId}/audit/ — per-session audit log directory",
+    "{resourceFlags}": "--memory {memory} --cpus {cpus} --read-only --tmpfs {mount} — resolved from swarm.resourceLimits"
   }
 }

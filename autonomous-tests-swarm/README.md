@@ -184,6 +184,8 @@ Same as [`autonomous-tests` configuration](../autonomous-tests/README.md#configu
 | `envPortMappings` | Maps env var names to services for port remapping — `direct` (bare port) or `url` (port within URL) |
 | `relatedServices` | Additional projects to include in each agent's stack (supports `compose`, `raw-docker`, and `npm-dev` modes per service) |
 | `relatedServices.*.nodeModulesStrategy` | `symlink` (default), `hardlink` (Turbopack-compatible), or `copy` (universal) — auto-detected from bundler |
+| `resourceLimits` | Container resource constraints — `memory` (`512m`, `1g`), `cpus` (`0.5`, `1`), `readOnlyRootfs` (bool), `tmpfsMounts` (writable paths). All default to null/false (opt-in) |
+| `audit` | Per-agent structured audit logs — `enabled` (default: true), `logDir`, `schemaVersion` (`"1.0"`). Logs command timelines, resource config, and cleanup verification per agent |
 | `cleanup` | Teardown options (remove volumes, orphans) |
 
 See [`references/config-schema-swarm.json`](references/config-schema-swarm.json) for the full schema.
@@ -199,6 +201,8 @@ Resolved per-agent at runtime:
 | `{containerName}` | `swarm-{N}-{service}` |
 | `{backendPort}` | Assigned host port for the backend service (primary compose stack) |
 | `{sessionId}` | Unique session identifier (timestamp-based) |
+| `{auditDir}` | Per-session audit log directory |
+| `{resourceFlags}` | Resolved `--memory`, `--cpus`, `--read-only`, `--tmpfs` flags |
 
 ### No Credentials Needed
 
@@ -227,6 +231,10 @@ The skill enforces explicit operational bounds to constrain resource usage and p
 | System commands | Explicit allowlist — only read-only/idempotent commands beyond user config |
 | External downloads | Docker images from user's compose files only — no arbitrary downloads |
 | Data access | `settings.json` and `.env` for safety checks only — values never logged or output |
+| Resource limits | Opt-in `memory`, `cpus`, `read_only`, `tmpfs` constraints per container — configured via `swarm.resourceLimits` |
+| Network labels | All Docker resources labeled `com.autonomous-swarm.*` with session and agent IDs — hardcoded, not configurable |
+| Capabilities freeze | Setup agent captures capabilities snapshot at setup time — suite agents use frozen snapshot, never re-scan |
+| Audit trail | Per-agent structured JSON audit logs with command timeline, resource config, cleanup verification — `schemaVersion: "1.0"` |
 | Trust boundaries | Untrusted inputs (diffs, docs) gated by mandatory plan approval before execution |
 
 [Back to top](#autonomous-tests-swarm)
@@ -294,17 +302,27 @@ If an agent's environment fails to start, its suites are redistributed to a heal
 | Env vars still have original ports | `envPortMappings` missing or incomplete | Add all port-containing env vars to `swarm.envPortMappings` — use `direct` for bare ports, `url` for ports in URLs |
 | Turbopack fails with symlinked `node_modules` | Turbopack can't resolve through symlinks | Set `nodeModulesStrategy: "hardlink"` on the related service — uses `cp -al` for real directory that bundlers can resolve |
 | Browser tests hit host services instead of agent stack | Env file remapping not configured or node_modules strategy incompatible | Check `swarm.envFiles` and `swarm.envPortMappings` are configured, and `nodeModulesStrategy` is `hardlink` for Next.js/Turbopack projects |
+| Container OOM killed | `resourceLimits.memory` too low for service | Increase `memory` limit or set to `null` (no limit) |
+| Read-only rootfs failures | Service writes to paths not in `tmpfsMounts` | Add writable paths to `tmpfsMounts` (e.g., `/tmp`, `/var/run`, `/var/log`) or disable `readOnlyRootfs` |
+| Orphaned volumes after failure | Dynamic volumes not caught by name-based cleanup | Run label-based cleanup: `docker volume ls --filter label=com.autonomous-swarm.session={sessionId} -q \| xargs docker volume rm` |
 
 ### Emergency Cleanup
 
 If a run is interrupted and Docker resources remain:
 
 ```bash
-# Stop and remove all swarm containers
+# Stop and remove all swarm containers (name-based)
 docker ps -a --filter name=swarm- -q | xargs docker rm -f 2>/dev/null
+
+# Stop and remove all swarm containers (label-based — catches dynamically named containers)
+docker ps -a --filter label=com.autonomous-swarm.managed=true -q | xargs docker rm -f 2>/dev/null
 
 # Remove swarm networks
 docker network ls --filter name=swarm- -q | xargs docker network rm 2>/dev/null
+docker network ls --filter label=com.autonomous-swarm.managed=true -q | xargs docker network rm 2>/dev/null
+
+# Remove swarm volumes (label-based — catches dynamically created volumes)
+docker volume ls --filter label=com.autonomous-swarm.managed=true -q | xargs docker volume rm 2>/dev/null
 
 # Clean up temp files
 rm -rf /tmp/autonomous-swarm-*

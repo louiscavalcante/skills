@@ -71,6 +71,10 @@ Read `~/.claude/settings.json` and check two things:
    > The `ExitPlanMode` approval hook ensures test plans require your approval before execution (even in `dontAsk` mode). This skill includes it as a skill-scoped hook, so it works automatically during `/autonomous-tests` runs. To also enable it globally, the setup script above already handles it.
    Then continue — do not block on this.
 
+3. **AskUserQuestion hook** (informational): if the `PreToolUse` → `AskUserQuestion` hook is not present, inform the user:
+   > The `AskUserQuestion` approval hook ensures user prompts (config approval, testing priorities, credential questions) are always shown — even in `dontAsk` or bypass mode. This skill includes it as a skill-scoped hook, so it works automatically during `/autonomous-tests` runs. To also enable it globally, the setup script already handles it.
+   Then continue — do not block on this.
+
 **Step 1: Capabilities Scan**
 
 Scan triggers: `rescan` argument is present, `capabilities` section is missing from config, or `capabilities.lastScanned` is older than `capabilities.rescanThresholdDays` (default 7 days).

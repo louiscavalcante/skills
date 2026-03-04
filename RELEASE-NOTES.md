@@ -1,5 +1,27 @@
 # Release Notes
 
+## v1.6.0 (2026-03-04)
+
+### Added
+- **Container resource limits** (autonomous-tests-swarm): opt-in `swarm.resourceLimits` config — `memory` (`--memory`), `cpus` (`--cpus`), `readOnlyRootfs` (`--read-only`), and `tmpfsMounts` (`--tmpfs`). Injected into generated compose files (`mem_limit`, `cpus`, `read_only`, `tmpfs`) and raw Docker `docker run` commands. All defaults are null/false — limits are opt-in, not enforced by default.
+- **Docker resource labeling** (autonomous-tests-swarm): all containers, networks, and volumes are labeled with `com.autonomous-swarm.managed=true`, `com.autonomous-swarm.session={sessionId}`, and `com.autonomous-swarm.agent={N}`. Labels are hardcoded (not configurable) and enable reliable secondary cleanup verification alongside name-based filtering.
+- **Per-agent structured audit logs** (autonomous-tests-swarm): `swarm.audit` config section — enabled by default with `schemaVersion: "1.0"`. Each suite agent writes `agent-{N}.json` with command timeline, port assignments, health check results, configured resource limits, teardown verification, and duration. Orchestrator merges into `audit-summary.json` with session metadata and totals.
+- **Capabilities freeze** (autonomous-tests-swarm): setup agent captures a capabilities snapshot at setup time (MCPs, frontend testing tools, external service CLI approvals). Snapshot is distributed verbatim to all suite agents. Suite agents must not re-scan — prevents drift during long-running swarm executions.
+- **Label-based emergency cleanup** commands in README: `docker ps/network/volume` filters using `com.autonomous-swarm.managed=true` label — catches dynamically created resources missed by name-based filters.
+- **`{auditDir}` and `{resourceFlags}` template placeholders** in config schema.
+
+### Changed
+- **Phase 0 Swarm Questionnaire**: new Q7 asks about container resource limits (memory, cpus, read-only rootfs) with defaults.
+- **Phase 2 Port Discovery**: new step 6 initializes audit directory and writes `session.json` manifest when audit is enabled.
+- **Phase 5 setup agent**: new substeps — freeze capabilities snapshot (6b), inject resource limits into compose/Docker files (6c), apply Docker labels to all resources (6d).
+- **Phase 5 suite agents**: receive frozen capabilities snapshot (substep b) — no re-scanning allowed. New substep h2 writes per-agent audit log after test results.
+- **Phase 5 post-execution**: label-based secondary cleanup verification for containers, networks, and volumes. New step 7b merges audit logs into summary.
+- **Phase 7 Documentation**: appends "Execution Audit" section to test-results when audit enabled — only the orchestrator writes to `docs/_autonomous/`.
+- **Phase 8 Cleanup**: label-based verification added alongside name-based checks (containers, networks, volumes).
+- **Operational Bounds**: 4 new bounds (resource limits scope, network labeling scope, capabilities freeze scope, audit scope). System command allowlist includes `docker ps/network/volume --filter label=` commands.
+- **Security Posture** (README): 4 new rows — resource limits, network labels, capabilities freeze, audit trail.
+- **Troubleshooting** (README): 3 new entries — OOM killed containers, read-only rootfs failures, orphaned volumes.
+
 ## v1.5.0 (2026-03-03)
 
 ### Added

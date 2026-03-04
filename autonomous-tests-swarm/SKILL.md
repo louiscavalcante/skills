@@ -72,6 +72,10 @@ Read `~/.claude/settings.json` and check two things:
    > The `ExitPlanMode` approval hook ensures test plans require your approval before execution (even in `dontAsk` mode). This skill includes it as a skill-scoped hook, so it works automatically during `/autonomous-tests-swarm` runs. To also enable it globally, the setup script above already handles it.
    Then continue — do not block on this.
 
+3. **AskUserQuestion hook** (informational): if the `PreToolUse` → `AskUserQuestion` hook is not present, inform the user:
+   > The `AskUserQuestion` approval hook ensures user prompts (config approval, testing priorities, credential questions) are always shown — even in `dontAsk` or bypass mode. This skill includes it as a skill-scoped hook, so it works automatically during `/autonomous-tests-swarm` runs. To also enable it globally, the setup script already handles it.
+   Then continue — do not block on this.
+
 **Step 1: Capabilities Scan**
 
 Scan triggers: `rescan` argument is present, `capabilities` section is missing from config, or `capabilities.lastScanned` is older than `capabilities.rescanThresholdDays` (default 7 days).
@@ -143,7 +147,8 @@ Schema reference: the base config uses `autonomous-tests/references/config-schem
    - If it runs on the host via `npm run dev`, `yarn dev`, or similar (no containers) → `mode: "npm-dev"`. Record `startCommand`, `projectPath`, and `envOverrides` (port, backend URL, etc.).
    Populate `relatedServices` with the detected mode and settings.
 6. Ask: "Maximum parallel agents?" (default: 5)
-7. Save swarm section to config and re-stamp config trust
+7. Ask: "Set container resource limits?" (default: no limits). If yes, ask for `memory` (e.g., `512m`, `1g`), `cpus` (e.g., `0.5`, `1`), and whether to enable `readOnlyRootfs` (requires `tmpfsMounts` for writable paths like `/tmp`, `/var/run`). Populate `swarm.resourceLimits`. All defaults are null/false — resource limits are opt-in.
+8. Save swarm section to config and re-stamp config trust
 
 No `credentialType` questions — each agent creates its own test data. Skip `userContext.testCredentials` and `credentialType` — not needed for swarm.
 
@@ -189,6 +194,7 @@ Do NOT start the shared stack — agents start their own isolated environments.
    - Compose mode: validate compose file exists and is parseable (`docker compose -f {file} config --quiet`)
    - Raw Docker mode: validate images exist locally or can be pulled (`docker image inspect {image} || docker pull {image}`)
    - Check Docker disk space: `docker system df` — warn if space is low (agents will spin up N copies)
+6. **Initialize audit directory**: if `swarm.audit.enabled` (default: true), create `mkdir -p /tmp/autonomous-swarm-{sessionId}/audit/`. Write a `session.json` manifest with `schemaVersion: "1.0"`, `sessionId`, start timestamp, branch, scope arguments, agent count, and resource limits config.
 
 ## Phase 3 — Autonomous Feature Identification & Discovery
 
@@ -283,6 +289,9 @@ Use `TeamCreate` to create a test team. Spawn `general-purpose` Agents as teamma
 4. Copy and remap env files per agent: for each file in `swarm.envFiles`, copy to `/tmp/autonomous-swarm-{sessionId}/agent-{N}/`. Apply port remapping using `swarm.envPortMappings`: `direct` type → regex `^(VAR_NAME)\s*=\s*["']?(\d+)["']?` → replace port with agent's assigned port for that service; `url` type → replace `(localhost|127\.0\.0\.1):ORIGINAL_PORT` with `localhost:ASSIGNED_PORT` (only the specific known port, to avoid false matches). Update compose `env_file:` paths to point to copies. Preserve comments, empty lines, `export` prefixes, and all non-matching variables verbatim.
 5. For npm-dev projects, apply `swarm.envPortMappings` remapping to `.env` / `.env.local` files in the copied project directory — ensures dotenv-loaded variables match the agent's port assignments
 6. Validate all compose configs (`docker compose -f {file} config --quiet` for each)
+6b. **Freeze capabilities snapshot**: read `capabilities` from config and produce a frozen snapshot (MCPs, frontend testing tools, external service CLIs with approval status). This snapshot is included verbatim in every suite agent's task description. Agents must NOT re-scan capabilities — they use the frozen snapshot only.
+6c. **Inject resource limits**: if `swarm.resourceLimits` is configured, add to generated compose files: `mem_limit: {memory}`, `cpus: {cpus}`, `read_only: {readOnlyRootfs}`, `tmpfs:` entries from `tmpfsMounts`. For raw Docker mode, add `{resourceFlags}` to `docker run` template: `--memory {memory}`, `--cpus {cpus}`, `--read-only`, `--tmpfs {mount}` (only non-null values).
+6d. **Apply Docker labels**: add labels to all generated compose files — `com.autonomous-swarm.managed=true`, `com.autonomous-swarm.session={sessionId}`, `com.autonomous-swarm.agent={N}` on services, networks, and volumes. For raw Docker mode, add `--label` flags to `docker run`, `docker network create`, and `docker volume create` commands.
 7. Read key source files needed for the Feature Context Document (changed files from Phase 3, model definitions, serializers, route handlers)
 8. Report back via `SendMessage`: validated environment specs per agent (confirmed compose file paths, port assignments, health check URLs, initialization commands) and the compiled Feature Context Document content
 
@@ -296,7 +305,9 @@ The orchestrator waits for the setup agent to complete before spawning suite age
 
    **a. Environment spec** (from setup agent): project name (`swarm-{N}`), assigned port range, port mappings per service, Docker context to use, pre-validated compose file path
 
-   **b. Environment setup (compose mode)**:
+   **b. Frozen capabilities snapshot** (from setup agent): agents receive the exact capabilities state at setup time — available MCPs, frontend testing tools, external service CLI approvals. Agents must NOT call `mcp-find`, `which`, or any re-scan commands. Use only the snapshot provided.
+
+   **b2. Environment setup (compose mode)**:
    - Compose files are pre-generated by the setup agent at `/tmp/autonomous-swarm-{sessionId}/agent-{N}/docker-compose.yml` with all host ports remapped to the agent's assigned range and container names namespaced via `-p swarm-{N}`. Related project compose files (if needed) are also pre-generated in the same directory.
    - Verify the compose file: `docker compose -f /tmp/autonomous-swarm-{sessionId}/agent-{N}/docker-compose.yml config --quiet`
    - Start: `docker compose -p swarm-{N} -f /tmp/autonomous-swarm-{sessionId}/agent-{N}/docker-compose.yml up -d`
@@ -337,6 +348,14 @@ The orchestrator waits for the setup agent to complete before spawning suite age
 
    **h. Results**: Report PASS/FAIL per suite with anomalies via `SendMessage`, same format as autonomous-tests
 
+   **h2. Audit log** (when `swarm.audit.enabled`): agent writes `agent-{N}.json` to `/tmp/autonomous-swarm-{sessionId}/audit/` with:
+   - `schemaVersion`: `"1.0"`
+   - `agentId`, `suites` (list of suite names and PASS/FAIL), `environment` (compose file path, port assignments, services, health check results)
+   - `timeline`: ordered `{ timestamp, action, target, result }` entries for compose up, health checks, initialization, test execution, teardown
+   - `configuredLimits`: the `resourceLimits` values from config (what was configured, NOT runtime sampling — no `docker stats` calls)
+   - `teardown`: verification status (containers removed, networks removed, volumes removed)
+   - `duration`: total wall time from environment start to teardown complete
+
    **i. Teardown (ALWAYS — even on failure)**:
    - Compose mode: `docker compose -p swarm-{N} -f /tmp/autonomous-swarm-{sessionId}/agent-{N}/docker-compose.yml down -v --remove-orphans`
    - Raw Docker mode: `docker stop $(docker ps -q --filter name=swarm-{N}) && docker rm $(docker ps -aq --filter name=swarm-{N}) && docker network rm swarm-{N}-net`
@@ -352,7 +371,18 @@ The orchestrator waits for the setup agent to complete before spawning suite age
    - Picks a healthy agent that has completed or is about to complete its suites
    - Sends the failed suites to the healthy agent via `SendMessage` (the healthy agent runs them against its already-running environment)
    - The failed agent still tears down its partially-started environment
-7. After all agents complete, verify ALL Docker resources cleaned up: `docker ps -a --filter name=swarm- -q` should return empty
+7. After all agents complete, verify ALL Docker resources cleaned up:
+   - Name-based (primary): `docker ps -a --filter name=swarm- -q` should return empty
+   - Label-based (secondary): `docker ps -a --filter label=com.autonomous-swarm.session={sessionId} -q` should return empty
+   - Networks: `docker network ls --filter label=com.autonomous-swarm.session={sessionId} -q` should return empty
+   - Volumes: `docker volume ls --filter label=com.autonomous-swarm.session={sessionId} -q` should return empty (catches dynamically created volumes)
+   - If any orphaned resources remain, clean them up and warn the user
+7b. **Merge audit logs** (when `swarm.audit.enabled`): merge all `agent-{N}.json` files from `/tmp/autonomous-swarm-{sessionId}/audit/` into `audit-summary.json` with:
+   - `schemaVersion`: `"1.0"`
+   - Session metadata (sessionId, branch, start/end timestamps, scope arguments)
+   - Per-agent entries (from individual audit files)
+   - Totals: agent count, suite count, pass/fail counts, total duration
+   - Cleanup verification: label-based check results for containers, networks, volumes
 8. Clean up session temp dir: `rm -rf /tmp/autonomous-swarm-{sessionId}`
 9. Shut down teammates via `SendMessage` with `type: "shutdown_request"`
 
@@ -371,15 +401,20 @@ Generate up to four doc types based on findings:
 - **pending-guided-tests**: Generated when tests need browser/visual/physical-device interaction.
 - **pending-autonomous-tests**: Generated when automatable tests were identified but not run (time/scope/dependency constraints).
 
+When `swarm.audit.enabled`: append an "Execution Audit" section to test-results with agent count, per-agent durations, configured resource limits, total pass/fail counts, cleanup verification status, and a reference to the audit JSON location. **Only the orchestrator** copies `audit-summary.json` to `docs/_autonomous/test-results/` — agents never write directly to persisted docs directories (preserves isolation boundary).
+
 On re-runs: if docs exist for this feature + date → append a "Re-run" section instead of duplicating.
 
 ## Phase 8 — Cleanup
 
 Remove only test data created during this run (identified by `testDataPrefix` from config). Never touch pre-existing data. Log every action. Verify cleanup with a final DB query.
 
-Additionally, verify Docker cleanup:
+Additionally, verify Docker cleanup (name-based primary, label-based secondary):
 - Run `docker ps -a --filter name=swarm- -q` — must return empty
+- Run `docker ps -a --filter label=com.autonomous-swarm.session={sessionId} -q` — must return empty
 - Run `docker network ls --filter name=swarm- -q` — must return empty
+- Run `docker network ls --filter label=com.autonomous-swarm.session={sessionId} -q` — must return empty
+- Run `docker volume ls --filter label=com.autonomous-swarm.session={sessionId} -q` — must return empty
 - Verify `/tmp/autonomous-swarm-{sessionId}` is removed
 - If any orphaned resources remain, clean them up and warn the user
 
@@ -421,6 +456,11 @@ After all phases complete, display this message prominently:
 - **Never run `npm-dev` related services from the original project directory — always copy to the agent's temp dir to prevent build artifact and lock file conflicts between parallel agents**
 - **Clean up `/tmp/autonomous-swarm-{sessionId}/` at the end of every run, even on failure — includes both Docker compose copies and npm-dev project copies**
 - **Never report anomalies or security findings without first verifying them against actual source code — findings from synthetic test data are false positives**
+- **Always apply resource limits (`mem_limit`, `cpus`, `read_only`, `tmpfs`) to generated compose files and docker run commands when `swarm.resourceLimits` is configured**
+- **Always label Docker networks and volumes with `com.autonomous-swarm.session={sessionId}` and `com.autonomous-swarm.agent={N}` — labels are hardcoded, not configurable**
+- **Never re-scan capabilities from within a suite agent — use the frozen snapshot provided by the setup agent**
+- **Always write per-agent audit logs (`agent-{N}.json`) when `swarm.audit.enabled` — agents write only to `/tmp/` audit directory**
+- **Only the orchestrator writes to persisted docs directories (`docs/_autonomous/`) — agents write only to `/tmp/` audit files and report via `SendMessage`**
 
 ## Operational Bounds
 
@@ -436,7 +476,11 @@ These bounds constrain resource usage and are enforced throughout execution:
 - **MCP scope**: Only MCPs marked `safe: true` can be activated — `safe: false` MCPs are never activated
 - **Agent lifecycle**: Each agent is spawned, starts its own Docker environment, executes suites, tears down, and is shut down — no persistent or long-lived agents
 - **External service CLI scope**: Limited to `allowedOperations` from the external services catalog per service. Per-run user confirmation required (Phase 5). Blocked entirely when `cli.blocked` is true for a service. `prohibitedFlags` and `prohibitedOperations` defined per service in the catalog are always blocked.
-- **System command allowlist**: Beyond user-approved config commands, the skill uses only these read-only or idempotent system commands: `which` (capability detection), `docker compose ps`/`docker context ls`/`docker system df` (Docker status), `git branch`/`git diff`/`git log` (diff analysis), `test -f` (file checks), `find . -maxdepth 3 -name "CLAUDE.md" -type f` (CLAUDE.md deep scan), `date -u` (UTC timestamps), `ss -tlnp`/`netstat -tlnp` (port availability), `curl -sf` to localhost URLs from config (health checks), `python3 -c` with `json`/`hashlib`/`re` stdlib (SHA-256 hashing, env file port remapping), `cp -al` (hardlink node_modules copy). The setup script (`setup-hook.sh`) modifies `~/.claude/settings.json` once at install time — not during test runs.
+- **System command allowlist**: Beyond user-approved config commands, the skill uses only these read-only or idempotent system commands: `which` (capability detection), `docker compose ps`/`docker context ls`/`docker system df` (Docker status), `docker ps -a --filter label=` (label-based container cleanup verification), `docker network ls --filter label=` (label-based network cleanup verification), `docker volume ls --filter label=` (label-based volume cleanup verification), `git branch`/`git diff`/`git log` (diff analysis), `test -f` (file checks), `find . -maxdepth 3 -name "CLAUDE.md" -type f` (CLAUDE.md deep scan), `date -u` (UTC timestamps), `ss -tlnp`/`netstat -tlnp` (port availability), `curl -sf` to localhost URLs from config (health checks), `python3 -c` with `json`/`hashlib`/`re` stdlib (SHA-256 hashing, env file port remapping), `cp -al` (hardlink node_modules copy). The setup script (`setup-hook.sh`) modifies `~/.claude/settings.json` once at install time — not during test runs.
 - **External download scope**: Docker images are pulled only by `docker compose up` or `docker pull` from the user's own compose files or `rawDockerServices` config — image names and registries are project-defined, not skill-defined. Playwright browsers are downloaded only if Playwright is present and requires them. No other downloads occur at runtime.
 - **Data access scope**: Files read outside the project root: `~/.claude/settings.json` (read-only, Phase 0 flag checks), `~/.claude/trusted-configs/{hash}.sha256` (read/write, one hash string per project), `~/.claude/CLAUDE.md` (read-only, global instructions). CLAUDE.md files within the project are scanned up to 3 directory levels deep (read-only, project context). `.env` files within the project are scanned in Phase 1 for production indicator patterns only — variable values are pattern-matched but never stored, logged, or included in any output. Modified compose files and env file copies are written only to `/tmp/autonomous-swarm-{sessionId}/` — original `.env` files are never modified, and non-port values are preserved verbatim in copies.
+- **Resource limits scope**: `swarm.resourceLimits` values are injected into generated compose files (`mem_limit`, `cpus`, `read_only`, `tmpfs`) and raw Docker `docker run` commands (`--memory`, `--cpus`, `--read-only`, `--tmpfs`). Only non-null values are applied. Limits are per-container, not per-agent. Audit logs record configured limits, not runtime usage — no `docker stats` calls.
+- **Network labeling scope**: All Docker resources (containers, networks, volumes) created by the skill are labeled with `com.autonomous-swarm.managed=true`, `com.autonomous-swarm.session={sessionId}`, and `com.autonomous-swarm.agent={N}`. Labels are hardcoded — not user-configurable. Used for secondary cleanup verification alongside name-based filtering.
+- **Capabilities freeze scope**: The setup agent captures a capabilities snapshot at setup time (Phase 5, step 6b). This snapshot is distributed verbatim to all suite agents. Suite agents must not call `mcp-find`, `which`, or any capability detection commands — they use only the frozen snapshot. This prevents drift during long-running swarm executions.
+- **Audit scope**: When `swarm.audit.enabled` (default: true), each suite agent writes a structured JSON audit log (`agent-{N}.json`) to `/tmp/autonomous-swarm-{sessionId}/audit/`. The orchestrator merges these into `audit-summary.json`. All audit files include `schemaVersion: "1.0"`. Agents write only to the `/tmp/` audit directory — only the orchestrator copies the summary to `docs/_autonomous/test-results/`.
 - **Trust boundaries**: Config file is SHA-256 verified against an out-of-repo trust store — modifications require re-approval. Untrusted inputs (git diffs, `docs/` files, `CLAUDE.md`, `file:<path>` references, `_autonomous/` history) are read for analysis only — they feed the Feature Context Document (Phase 3) which flows into the test plan (Phase 4). The test plan requires explicit user approval via ExitPlanMode hook before any execution. No content from untrusted sources is interpolated into shell commands.
