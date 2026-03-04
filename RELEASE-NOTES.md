@@ -1,5 +1,12 @@
 # Release Notes
 
+## v1.9.0 (2026-03-04)
+
+### Changed
+- **Phase 3 — Explore agent delegation** (autonomous-tests + swarm): Feature identification and discovery is now delegated to a single Explore agent (`subagent_type: "Explore"`) instead of running inline Glob/Grep/Read in the main context. The Explore agent performs feature map building, dependency graph tracing, smart doc analysis (all 3 sub-steps), and edge case inventory, then returns structured findings. The orchestrator compiles the Feature Context Document from the agent's report without re-reading files. Spawned without `team_name` since Phase 3 runs before team creation.
+- **Phase 2 — Service Readiness Report** (autonomous-tests): Phase 2 now produces a structured Service Readiness Report (one entry per service: name, URL/port, health status, health check endpoint, source). The report flows through Phase 4 Context Reload into Phase 5 task descriptions — agents receive correct service URLs/ports and are prohibited from starting services or re-checking health.
+- **Phase 5 — Sequential execution enforcement** (autonomous-tests): Replaced prose description with an explicit pseudocode loop and prohibited patterns list. The loop enforces: spawn one agent → block → wait for completion → shut down → only then proceed. Prohibited patterns include spawning multiple agents before any completes, spawning agent N+1 before agent N shuts down, and any parallel or overlapping agent execution.
+
 ## v1.8.0 (2026-03-04)
 
 ### Added

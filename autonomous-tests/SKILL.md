@@ -156,18 +156,48 @@ Schema reference: `references/config-schema.json`.
 
 **ABORT if any production indicators found** in `.env` files: any `productionIndicators` from `externalServices[]` entries, `*LIVE*SECRET*`, `NODE_ENV=production`, production DB endpoints (RDS, Atlas without dev/stg/test), non-local API URLs. Show variable NAME only, never the value. Run `sandboxCheck` commands from config. Verify Docker is local.
 
-## Phase 2 — Service Startup
+## Phase 2 — Service Startup & Readiness Report
 
-For each service in config **and each related project with a `startCommand`**: health check → if unhealthy, start + poll 30s → if still unhealthy, STOP for user guidance. Start webhook listeners in background. Tail logs for errors during execution.
+1. For each service in config **and each related project with a `startCommand`**:
+   - Health check → if healthy, record status as `already-running`
+   - If unhealthy → start + poll at 5-second intervals for 30 seconds → if healthy, record status as `started-this-run` → if still unhealthy after 30s, **STOP** for user guidance
+2. Start webhook listeners in background. Tail logs for errors during execution.
+3. **Produce Service Readiness Report** — one entry per service:
+   - Service name
+   - URL (with port)
+   - Health status (`already-running` | `started-this-run`)
+   - Health check endpoint used
+   - Source (`config` | `relatedProject`)
+4. Keep the Service Readiness Report in memory for Phase 4 passthrough.
 
 ## Phase 3 — Autonomous Feature Identification & Discovery
 
 All identification is fully autonomous — derive everything from the code diff, codebase, or guided source. Never ask the user what to test.
 
+**Delegation**: Phase 3 exploration is delegated to a single Explore agent (`subagent_type: "Explore"`) to preserve the orchestrator's context window. The Explore agent is spawned via the `Agent` tool **without** `team_name` — Phase 3 runs before team creation; the `team_name` requirement only applies to Phases 5-6.
+
 ### Standard mode (no `guided` argument)
 
 1. Get changed files from git based on scope arguments — **include related projects** (`relatedProjects[].path`) when tracing cross-project dependencies (e.g., backend API change that affects webapp pages)
 2. **File reference processing**: if `file:<path>` was provided, read the `.md` file. Extract feature descriptions, acceptance criteria, endpoints, edge cases, and any test scenarios described in the doc. This supplements (doesn't replace) diff-based discovery — merge file reference insights with diff analysis.
+3. **Spawn ONE Explore agent** — prompt includes:
+   - Changed files list (from git diff)
+   - File reference content (if `file:<path>` was provided)
+   - `relatedProjects[]` paths from config
+   - `testing.contextFiles` entries from config
+   - All discovered CLAUDE.md file paths (from deep scan)
+   - Documentation output directories from config (`documentation.*` paths)
+
+   The agent performs:
+   - **Feature map building**: for each changed file, identify API endpoints, database operations (MongoDB: `find`, `aggregate`, `insertMany`, `updateOne`, `deleteMany`, `bulkWrite`, `createIndex`, Mongoose/Typegoose schema changes; SQL: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `JOIN`, `GROUP BY`, `CREATE TABLE`, `ALTER TABLE`, `CREATE INDEX`, migrations, ORM operations), external service integrations, business logic, auth flows, signal/event chains
+   - **Dependency graph tracing**: callers → changed code → callees, follow imports across files and project boundaries
+   - **Smart doc analysis** (all 3 sub-steps):
+     - a. Standard doc analysis — match file paths, feature names, endpoint references, `testing.contextFiles` against `docs/` tree. Read only relevant docs.
+     - b. `_autonomous/` folder scan — match filenames against current features. Read only Summary and Issues Found sections. Extract prior failures, known bugs, guided tests, pending autonomous tests.
+     - c. Fix completion scan — find `### Resolution` blocks with `Status: RESOLVED` and `Verification: PASS` → regression targets. Find `Ready for Re-test: YES` in fix-results → priority re-test targets.
+   - **Edge case inventory**: error handlers, validation branches, race conditions, retry logic from reading the code
+
+4. **Receive agent report** — structured findings from the Explore agent.
 
 ### Guided mode (`guided` argument present)
 
@@ -180,40 +210,23 @@ All identification is fully autonomous — derive everything from the code diff,
      - **Option 1**: "Pick a doc file" — list `.md` files from `docs/` and `_autonomous/pending-guided-tests/` (if they exist) for the user to choose from. Once chosen → doc-based mode.
      - **Option 2**: "Describe a feature or workflow" — free text input. Once provided → description-based mode.
 
-2. **Deep feature analysis** — trace the guided feature through the codebase:
-   - Extract keywords, feature names, endpoint patterns, model names, and workflow steps from the guided source (doc content or description)
-   - **Filename search**: use Glob to find files with names matching feature keywords (e.g., `*payment*`, `*checkout*`, `*order*`)
-   - **Content search**: use Grep to search for routes, handlers, models, services, and middleware matching feature keywords (e.g., `/api/payment`, `PaymentService`, `OrderModel`)
-   - **Read all identified files** — build the complete picture of how the feature works across the codebase
-   - Follow imports and dependencies to trace the full execution path (controllers → services → models → middleware → validators)
+2. **Spawn ONE Explore agent** — prompt includes:
+   - Guided source content (doc content or description text)
+   - Guided mode type (`doc-based` or `description-based`)
+   - `relatedProjects[]` paths from config
+   - `testing.contextFiles` entries from config
+   - All discovered CLAUDE.md file paths (from deep scan)
+   - Documentation output directories from config (`documentation.*` paths)
 
-### Common steps (both modes)
+   The agent performs:
+   - **Deep feature analysis**: extract keywords, feature names, endpoint patterns, model names, workflow steps from the guided source. Search via Glob (filenames matching feature keywords) and Grep (routes, handlers, models, services). Read all identified files. Trace imports and dependencies for the full execution path.
+   - **Feature map building**, **dependency graph tracing**, **smart doc analysis** (all 3 sub-steps), and **edge case inventory** — same as standard mode above.
 
-3. For each identified file (from diff in standard mode, or from deep analysis in guided mode), build a **feature map**:
-   - API endpoints affected (routes, controllers, handlers)
-   - Database operations — distinguish by type:
-     - **MongoDB**: `find`, `findOne`, `aggregate`, `insertMany`, `insertOne`, `updateOne`, `updateMany`, `deleteOne`, `deleteMany`, `bulkWrite`, `createIndex`, collection creation, Mongoose/Typegoose schema changes
-     - **SQL**: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `JOIN`, `GROUP BY`, `CREATE TABLE`, `ALTER TABLE`, `CREATE INDEX`, migrations (Prisma, Knex, Sequelize, TypeORM, Drizzle, Alembic, Django), ORM operations
-   - External service integrations (webhooks, SDK calls, third-party APIs)
-   - Business logic and validation rules
-   - Authentication/authorization flows touched
-   - Signal/event chains (pub/sub, queues, outbox patterns)
-4. Trace the full dependency graph: callers → changed code → callees. Follow imports across files and project boundaries to understand the complete blast radius.
-5. **Smart doc analysis**:
+3. **Receive agent report** — structured findings from the Explore agent.
 
-   **a. Standard doc analysis**: identify docs relevant to the changed code by matching file paths, feature names, endpoint references, and `testing.contextFiles` entries. Scan the `docs/` tree but read only relevant files — never read all docs indiscriminately. Skip purely historical or unrelated docs.
+### Compile Feature Context Document (both modes)
 
-   **b. _autonomous folder scan**: scan the configured documentation output directories (`documentation.testResults`, `documentation.pendingFixes`, `documentation.pendingGuidedTests`, `documentation.pendingAutonomousTests` paths from config). Match filenames — which contain `{feature-name}` — against current features, endpoints, and files from the feature map. For matches, read **only** the Summary and Issues Found sections (do not read full documents). Extract:
-   - Previously failing tests for the same features
-   - Known bugs and pending fixes related to current changes
-   - Guided tests that may now be automatable (e.g., agent-browser is now available)
-   - Pending autonomous tests queued from earlier runs that target the same features
-
-   Feed extracted findings as a "Prior Test History" section in the Feature Context Document.
-
-   **c. Fix completion scan**: Scan pending-fixes docs for `### Resolution` blocks. Items with `Status: RESOLVED` and `Verification: PASS` become **regression targets** — add them to the test plan for re-verification. Scan the `documentation.fixResults` directory for documents with `Ready for Re-test: YES` — these are **priority re-test targets** from recent fix cycles and should be tested first.
-
-6. Produce a **Feature Context Document** (kept in memory, not written to disk) summarizing: all features touched, all endpoints, all DB collections/tables affected, all external services involved, all edge cases identified from reading the code (error handlers, validation branches, race conditions, retry logic), prior test history from `_autonomous/` scans, file reference content (if provided), and available capabilities from config. **If guided mode**: include at the top of the document: `Mode: guided (doc-based|description-based)`, `Source: <file path or description text>`. This document is cascaded to every agent in Phase 5.
+Compile the **Feature Context Document** (kept in memory, not written to disk) from the Explore agent's report — do NOT re-read files already analyzed by the agent. The document summarizes: all features touched, all endpoints, all DB collections/tables affected, all external services involved, all edge cases identified, prior test history from `_autonomous/` scans, file reference content (if provided), and available capabilities from config. **If guided mode**: include at the top of the document: `Mode: guided (doc-based|description-based)`, `Source: <file path or description text>`. This document is cascaded to every agent in Phase 5.
 
 ## Phase 4 — Test Plan (Plan Mode)
 
@@ -226,6 +239,7 @@ All identification is fully autonomous — derive everything from the code diff,
 - Any related project paths involved
 - Key findings from Phase 3 (affected modules, endpoints, dependencies)
 - The `userContext` from config (flaky areas, testing priorities, notes)
+- The **Service Readiness Report** from Phase 2 — service names, URLs/ports, health status. The plan MUST include these URLs so agents use the correct endpoints. Agents MUST NOT start services or re-check health.
 - If guided mode: the guided mode type (`doc-based` or `description-based`) and the source (file path or description text)
 
 This ensures that when context is cleared after plan approval, the executing agent can fully reconstruct the session state.
@@ -325,7 +339,7 @@ Skipping a browser test without attempting these tools is **PROHIBITED**.
 Each verified finding must be categorized by: **Severity**, **Regulatory impact** (which laws apply), **Exploitability** (how easily an attacker can leverage it), **Compliance risk** (legal/financial exposure). All API response security findings go into the `### API Response Security` subsection of `## Issues Found` in test-results documentation.
 
 **Execution flow**:
-1. Create tasks for each suite via `TaskCreate` — include: env details from config, exact test steps, verification queries, teardown instructions, the full Feature Context Document, the **role name** of the assigned credential, available browser tools and their status from config capabilities, and **database lifecycle commands**:
+1. Create tasks for each suite via `TaskCreate` — include: env details from config, exact test steps, verification queries, teardown instructions, the full Feature Context Document, the **role name** of the assigned credential, available browser tools and their status from config capabilities, the **Service Readiness Report** (service URLs, ports — agents use these directly and MUST NOT start services or re-check health), and **database lifecycle commands**:
    - **Pre-test**: if `database.migrationCommand` exists, run migrations first. Then apply the seeding strategy:
      - If `database.seedStrategy` is `"autonomous"` (or missing — the default): task description instructs the agent to "create all necessary test data for your suite using API endpoints or direct DB operations, prefixed with `testDataPrefix`, before running tests. Do not rely on pre-existing data."
      - If `database.seedStrategy` is `"command"`: run `database.seedCommand` after migrations (existing behavior).
@@ -334,14 +348,29 @@ Each verified finding must be categorized by: **Severity**, **Regulatory impact*
    - Agents execute in order: migrate → seed (autonomous or command) → test → cleanup.
    - **Browser tools**: include the `agent-browser` workflow (`open <url>` → `snapshot -i` → `click/fill @ref` → re-snapshot after changes) and the browser tool priority chain. Explicitly state: "Do NOT skip this suite because it involves browser testing — use `agent-browser` as your primary browser tool."
 2. Assign tasks to agents via `TaskUpdate` with `owner`
-3. Execute suites **sequentially** — one at a time:
-   - Spawn ONE `general-purpose` agent with `model: "opus"` and `team_name`
-   - Assign it the first suite task via `TaskUpdate` with `owner`
-   - When the agent completes and marks the task done, shut it down via `SendMessage` with `type: "shutdown_request"`
-   - Spawn a **new** agent for the next suite task — a fresh agent keeps context clean and avoids token exhaustion from accumulated state
-   - Repeat until all suite tasks are complete
-   - Only one agent runs at a time — the orchestrator waits for each to finish before spawning the next
-   - Never execute test suites in the main conversation
+3. Execute suites STRICTLY sequentially — NEVER in parallel:
+
+   CRITICAL: Follow this exact loop. Deviating is PROHIBITED.
+
+   ```
+   for each suite_task in approved_suite_tasks (in order):
+       1. Spawn ONE agent (general-purpose, model: "opus", team_name)
+       2. Assign suite_task via TaskUpdate with owner
+       3. BLOCK — do NOT proceed. Wait for completion message.
+          Do NOT spawn another agent or assign another task.
+       4. Receive completion message
+       5. Shut down agent via SendMessage shutdown_request
+       6. Wait for shutdown confirmation
+       7. Report PASS/FAIL
+       8. Only NOW proceed to next iteration
+   ```
+
+   Prohibited patterns:
+   - Spawning multiple agents before any has completed
+   - Spawning agent N+1 before agent N is shut down
+   - Assigning tasks to multiple agents concurrently
+   - Any parallel or overlapping agent execution
+   - Executing test suites in the main conversation
 4. Report PASS/FAIL after each suite completes, including any anomalies detected
 5. After all suites complete, shut down teammates via `SendMessage` with `type: "shutdown_request"`
 6. **Audit summary**: After all agents complete, log to the test-results doc: number of agents spawned, suites executed, total docker exec commands run, and cleanup verification status
@@ -385,7 +414,8 @@ After all phases complete, display this message prominently:
 - Always spawn agents with `model: "opus"` for maximum reasoning capability
 - Be idempotent — skip or reset cleanly if test data already exists
 - Treat ALL external APIs with care — add delays between calls, use sandbox/test modes, minimize unnecessary requests
-- Execution is always sequential — one agent at a time, preventing credential conflicts and log cross-contamination
+- **Execution is STRICTLY sequential** — spawn one agent, BLOCK until it completes and is shut down, only then spawn the next. Never have two agents alive simultaneously during Phases 5-6.
+- Explore agents in Phase 3 are read-only — MUST NOT edit files or run state-modifying Bash commands
 - If no unit tests exist → note in report, do not treat as a failure
 - Use UTC timestamps everywhere (docs, config, logs) — always obtain from `date -u`, never guess
 - Never activate Docker MCPs where `safe: false` — these may be production or unknown-mode services
@@ -409,7 +439,8 @@ These bounds constrain resource usage and are enforced throughout execution:
 - **Docker scope**: Local containers only — Phase 1 aborts on any production indicator
 - **Credential scope**: Env var references only — raw values forbidden in config, redacted on display, excluded from documentation output
 - **MCP scope**: Only MCPs marked `safe: true` can be activated — `safe: false` MCPs are never activated
-- **Agent lifecycle**: Each agent is spawned, executes one suite, and is shut down — no persistent or long-lived agents
+- **Agent lifecycle**: Each agent is spawned, executes one suite, reports completion, and is shut down before the next agent is spawned. At most ONE suite agent exists at any time during Phases 5-6.
+- **Explore agent scope**: One Explore agent per Phase 3 run. Read-only. Spawned without `team_name`.
 - **External service CLI scope**: Limited to `allowedOperations` from the external services catalog per service. Per-run user confirmation required (Phase 5). Blocked entirely when `cli.blocked` is true for a service. `prohibitedFlags` and `prohibitedOperations` defined per service in the catalog are always blocked.
 - **System command allowlist**: Beyond user-approved config commands, the skill uses only these read-only or idempotent system commands: `which` (capability detection), `docker compose ps` (service status), `git branch`/`git diff`/`git log` (diff analysis), `test -f` (file checks), `find . -maxdepth 3 -name "CLAUDE.md" -type f` (CLAUDE.md deep scan), `date -u` (UTC timestamps), `curl -sf` to localhost URLs from config (health checks), `python3 -c` with `json`/`hashlib` stdlib only (SHA-256 hashing). The setup script (`setup-hook.sh`) modifies `~/.claude/settings.json` once at install time — not during test runs.
 - **External download scope**: Docker images are pulled only by `docker compose up` from the user's own compose files — image names and registries are project-defined, not skill-defined. Playwright browsers are downloaded only if Playwright is present and requires them — the skill checks availability via `npx playwright --version` but does not force installation. No other downloads (URLs, repos, scripts, packages) occur at runtime.
