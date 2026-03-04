@@ -1,5 +1,19 @@
 # Release Notes
 
+## v1.8.0 (2026-03-04)
+
+### Added
+- **Guided mode** (autonomous-tests + swarm): `guided` argument enables testing existing features or workflows without code changes. Bypasses git diff analysis and traces a described feature through the codebase using keyword search (Glob for filenames, Grep for routes/models/handlers).
+- **Two guided sub-modes**: doc-based (`guided file:<path>` — full 9-category coverage) and description-based (`guided "description"` — happy path + security only). `guided` alone prompts via `AskUserQuestion` to pick a doc or describe a feature.
+- **Guided combinability rules**: `guided` is combinable with `rescan` but NOT with `staged`, `unstaged`, `N`, or `working-tree` — validated at Phase 3 start with a clear error message.
+- **Trigger tests** for guided mode: `guided-test-feature.txt` (autonomous-tests) and `guided-swarm-test-feature.txt` (autonomous-tests-swarm).
+
+### Changed
+- **Phase 3** (autonomous-tests + swarm): split into conditional branches — standard mode (git diff, unchanged) and guided mode (resolve source → deep feature analysis → common steps). Both converge at the feature map building step.
+- **Phase 4** (autonomous-tests + swarm): test category scope is now conditional — standard or guided doc-based uses all 9 categories; guided description-based uses only happy path + security. Context Reload Step 0 includes guided mode type and source when applicable.
+- **Feature Context Document**: includes `Mode: guided (doc-based|description-based)` and `Source:` header when guided mode is active.
+- **Smart doc analysis**: clarified as "always active in standard mode" — guided mode has its own deep feature analysis that replaces diff-based discovery.
+
 ## v1.7.0 (2026-03-04)
 
 ### Changed

@@ -25,6 +25,7 @@ Analyzes your code changes (and optional doc file references), auto-detects avai
 ## What It Does
 
 - **Analyzes git diffs** to identify features, endpoints, and database operations touched
+- **Guided mode** — test existing features without code changes via `guided "description"` or `guided file:<path>`
 - **Accepts `.md` doc references** as additional test context via `file:<path>`
 - **Auto-detects capabilities** — Docker MCPs, agent-browser, Playwright, external service CLIs — and caches them
 - **Learns from past runs** by scanning `_autonomous/` history for related test results and known issues
@@ -142,6 +143,9 @@ The skill enters plan mode with a full test plan — review it and approve befor
 | `working-tree` | Staged + unstaged changes (same as default) |
 | `file:<path>` | Use a `.md` doc as additional test context (path relative to project root) |
 | `rescan` | Force re-scan of capabilities regardless of cache |
+| `guided` | Feature/workflow-centric mode — prompts to pick a doc or describe a feature |
+| `guided "description"` | Test a feature by description — happy path + security only |
+| `guided file:<path>` | Test a feature from a spec doc — full 9-category coverage |
 
 > **Note:** The default scope (`working-tree`) requires staged or unstaged changes to exist. If your working tree is clean, the skill will stop and ask you to either specify a commit range (e.g., `/autonomous-tests 3` for the last 3 commits) or make changes first.
 
@@ -150,9 +154,12 @@ Arguments are combinable. Examples:
 /autonomous-tests staged file:docs/payments.md
 /autonomous-tests 3 rescan
 /autonomous-tests file:docs/feature-spec.md rescan
+/autonomous-tests guided "payment checkout flow"
+/autonomous-tests guided file:docs/payments.md
+/autonomous-tests guided rescan
 ```
 
-Smart doc analysis is always active — the skill identifies which `docs/` files are relevant to changed code and reads only those.
+Smart doc analysis is always active in standard mode — the skill identifies which `docs/` files are relevant to changed code and reads only those.
 
 ## Configuration
 
@@ -259,6 +266,32 @@ The file is read during Phase 3 (Discovery) and its content — feature descript
 
 The path must be relative to the project root and point to an existing `.md` file.
 
+### Guided Mode
+
+Use `guided` to test existing features or workflows without needing code changes. This bypasses git diff analysis and instead traces a described feature through the codebase.
+
+| Sub-mode | Trigger | Test Coverage |
+|---|---|---|
+| Doc-based | `guided file:docs/spec.md` or pick from `docs/`/`_autonomous/pending-guided-tests/` when prompted | Full 9-category coverage |
+| Description-based | `guided "payment checkout flow"` or describe when prompted | Happy path + security analysis |
+
+**How it works:**
+- `guided` alone prompts you to pick a doc or describe a feature
+- `guided "description"` uses the description to search the codebase for related files, endpoints, models, and services
+- `guided file:<path>` reads the spec doc and extracts features, endpoints, and acceptance criteria
+
+**Combinability:**
+- Combinable with `rescan`: `/autonomous-tests guided rescan`
+- **NOT** combinable with `staged`, `unstaged`, `N`, or `working-tree` — guided mode bypasses git diff analysis
+
+**Examples:**
+```
+/autonomous-tests guided
+/autonomous-tests guided "user registration and onboarding"
+/autonomous-tests guided file:docs/payments-feature.md
+/autonomous-tests guided file:docs/_autonomous/pending-guided-tests/checkout-flow.md rescan
+```
+
 ### Test History
 
 The skill scans your `_autonomous/` output folders for previous test results related to the current changes. It matches filenames (which contain feature names) against the current feature map, then reads only Summary and Issues Found sections from matching docs.
@@ -306,7 +339,7 @@ After fixing a bug documented in `pending-fixes/`, re-test it by targeting the p
 Phase 0: Config     ← Setup, validate, scan capabilities
 Phase 1: Safety     ← Block if production detected
 Phase 2: Startup    ← Health-check and start services
-Phase 3: Discovery  ← Analyze diff, file refs, history
+Phase 3: Discovery  ← Analyze diff (or guided feature), file refs, history
 Phase 4: Plan       ← Generate test plan (you approve)
 Phase 5: Execute    ← Agent Teams run suites sequentially
 Phase 6: Fix        ← Auto-fix runtime issues, document bugs
@@ -318,7 +351,7 @@ Phase 9: Advisory   ← Remind user to /clear before next skill
 - **Phase 0** loads your config or walks you through first-run setup. Scans for available capabilities (Docker MCPs, agent-browser, Playwright, external service CLIs) and caches results. Returning runs validate the config, check trust, and refresh stale capabilities.
 - **Phase 1** scans `.env` files for production indicators (`sk_live_`, `NODE_ENV=production`, etc.) and aborts if any are found.
 - **Phase 2** health-checks each service and starts any that are down, including related projects.
-- **Phase 3** reads every changed file, processes `file:<path>` references if provided, builds a feature map (endpoints, DB ops, auth flows), traces the full dependency graph across project boundaries, and scans `_autonomous/` folders for prior test history related to current changes.
+- **Phase 3** reads every changed file (or traces a guided feature through the codebase), processes `file:<path>` references if provided, builds a feature map (endpoints, DB ops, auth flows), traces the full dependency graph across project boundaries, and scans `_autonomous/` folders for prior test history related to current changes.
 - **Phase 4** enters plan mode with test suites covering happy paths, validation, idempotency, error handling, race conditions, security, and edge cases. You approve before anything executes.
 - **Phase 5** executes one suite at a time: spawns an Agent Team member, assigns it a suite, waits for completion, shuts it down, then spawns the next. Each agent gets the full feature context (including prior history and available capabilities) and an assigned test credential role. Sequential execution prevents credential conflicts and log cross-contamination. Agents leverage detected capabilities — agent-browser for UI tests, Playwright for frontend tests, safe Docker MCPs, and external service CLIs when not blocked.
 - **Phase 6** auto-fixes runtime issues (env vars, containers) up to 3 times. Code bugs are documented and shown to you.
@@ -341,6 +374,7 @@ Phase 9: Advisory   ← Remind user to /clear before next skill
 | "External service CLI blocked" | Production keys detected | Switch to sandbox/test keys for the affected service |
 | Capabilities seem stale | Cache older than threshold | Run `/autonomous-tests rescan` to force re-scan |
 | "File reference not found" | `file:<path>` points to missing file | Check path is relative to project root and file exists |
+| "guided cannot be combined with git-scope args" | `guided` used with `staged`/`unstaged`/`N`/`working-tree` | Use `guided` alone or with `rescan` only — guided bypasses git diffs |
 
 ### Resetting Configuration
 

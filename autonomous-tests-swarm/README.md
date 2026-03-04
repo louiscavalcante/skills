@@ -149,11 +149,42 @@ The skill enters plan mode with a full test plan — review and approve. Each ag
 | `working-tree` | Staged + unstaged changes (same as default) |
 | `file:<path>` | Use a `.md` doc as additional test context (path relative to project root) |
 | `rescan` | Force re-scan of capabilities regardless of cache |
+| `guided` | Feature/workflow-centric mode — prompts to pick a doc or describe a feature |
+| `guided "description"` | Test a feature by description — happy path + security only |
+| `guided file:<path>` | Test a feature from a spec doc — full 9-category coverage |
 
 Arguments are combinable:
 ```
 /autonomous-tests-swarm staged file:docs/payments.md
 /autonomous-tests-swarm 3 rescan
+/autonomous-tests-swarm guided "payment checkout flow"
+/autonomous-tests-swarm guided file:docs/payments.md
+/autonomous-tests-swarm guided rescan
+```
+
+### Guided Mode
+
+Use `guided` to test existing features or workflows without needing code changes. This bypasses git diff analysis and instead traces a described feature through the codebase.
+
+| Sub-mode | Trigger | Test Coverage |
+|---|---|---|
+| Doc-based | `guided file:docs/spec.md` or pick from `docs/`/`_autonomous/pending-guided-tests/` when prompted | Full 9-category coverage |
+| Description-based | `guided "payment checkout flow"` or describe when prompted | Happy path + security analysis |
+
+**How it works:**
+- `guided` alone prompts you to pick a doc or describe a feature
+- `guided "description"` uses the description to search the codebase for related files, endpoints, models, and services
+- `guided file:<path>` reads the spec doc and extracts features, endpoints, and acceptance criteria
+
+**Combinability:**
+- Combinable with `rescan`: `/autonomous-tests-swarm guided rescan`
+- **NOT** combinable with `staged`, `unstaged`, `N`, or `working-tree` — guided mode bypasses git diff analysis
+
+**Examples:**
+```
+/autonomous-tests-swarm guided
+/autonomous-tests-swarm guided "user registration and onboarding"
+/autonomous-tests-swarm guided file:docs/payments-feature.md
 ```
 
 [Back to top](#autonomous-tests-swarm)
@@ -260,7 +291,7 @@ See [`autonomous-tests/references/templates.md`](../autonomous-tests/references/
 Phase 0: Config          ← Setup, validate, scan capabilities, detect Docker context
 Phase 1: Safety          ← Block if production detected
 Phase 2: Port Discovery  ← Scan ports, validate Docker environment
-Phase 3: Discovery       ← Analyze diff, file refs, history
+Phase 3: Discovery       ← Analyze diff (or guided feature), file refs, history
 Phase 4: Plan            ← Generate test plan with per-agent env specs (you approve)
 Phase 5: Swarm Execute   ← Each agent: start env → init → test → teardown
 Phase 6: Fix             ← Auto-fix runtime issues, document bugs
@@ -305,6 +336,7 @@ If an agent's environment fails to start, its suites are redistributed to a heal
 | Container OOM killed | `resourceLimits.memory` too low for service | Increase `memory` limit or set to `null` (no limit) |
 | Read-only rootfs failures | Service writes to paths not in `tmpfsMounts` | Add writable paths to `tmpfsMounts` (e.g., `/tmp`, `/var/run`, `/var/log`) or disable `readOnlyRootfs` |
 | Orphaned volumes after failure | Dynamic volumes not caught by name-based cleanup | Run label-based cleanup: `docker volume ls --filter label=com.autonomous-swarm.session={sessionId} -q \| xargs docker volume rm` |
+| "guided cannot be combined with git-scope args" | `guided` used with `staged`/`unstaged`/`N`/`working-tree` | Use `guided` alone or with `rescan` only — guided bypasses git diffs |
 
 ### Emergency Cleanup
 

@@ -1,7 +1,7 @@
 ---
 name: autonomous-tests-swarm
-description: 'Run autonomous E2E tests with per-agent Docker isolation. Each agent spins up its own database, API, and services on unique ports — true parallel testing with zero credential conflicts. Args: staged | unstaged | N | working-tree | file:<path> | rescan'
-argument-hint: 'staged | unstaged | N | working-tree | file:<path> | rescan'
+description: 'Run autonomous E2E tests with per-agent Docker isolation. Each agent spins up its own database, API, and services on unique ports — true parallel testing with zero credential conflicts. Args: staged | unstaged | N | working-tree | file:<path> | rescan | guided [description]'
+argument-hint: 'staged | unstaged | N | working-tree | file:<path> | rescan | guided'
 disable-model-invocation: true
 allowed-tools: Bash(*), Read(*), Write(*), Edit(*), Glob(*), Grep(*), Agent(*),
   EnterPlanMode(*), ExitPlanMode(*), TaskCreate(*),
@@ -48,10 +48,19 @@ Project-agnostic autonomous E2E test runner with **per-agent Docker isolation**.
 | `working-tree` | Staged + unstaged changes (same as default) |
 | `file:<path>` | Use a `.md` doc as additional test context (relative to project root). Combinable with other args. |
 | `rescan` | Force re-scan of capabilities regardless of cache. Combinable with other args. |
+| `guided` | Feature/workflow-centric discovery — bypasses git diff, traces a described feature through the codebase. Alone: prompts user to pick a doc or describe a feature. |
+| `guided "description"` | Description-based guided mode — happy path + security analysis only. E.g., `guided "payment checkout flow"` |
+| `guided file:<path>` | Doc-based guided mode — full 9-category coverage using a spec doc as the feature source. E.g., `guided file:docs/payments.md` |
 
 Args are space-separated. `file:` prefix is detected and the path validated as an existing `.md` file relative to project root. Multiple args can be combined (e.g., `staged file:docs/feature.md rescan`).
 
-Smart doc analysis is always active: identify which `docs/` files are relevant to the changed code by path, feature name, and cross-references — read only those, never all docs.
+**Guided mode** enables testing existing features or workflows without code changes. Two sub-modes:
+- **Doc-based** (`guided file:<path>` or pick from `docs/`/`_autonomous/pending-guided-tests/` when prompted): full 9-category test coverage, same as standard mode.
+- **Description-based** (`guided "description"` or describe when prompted): happy path only + security analysis, API response inspection, finding verification, and anomaly detection.
+
+When `guided` is used alone (no file or description), the skill prompts via `AskUserQuestion` to either pick a doc or describe a feature. `guided` is combinable with `rescan` but **NOT** with `staged`, `unstaged`, `N`, or `working-tree` — these git-scope args are incompatible with guided mode since guided bypasses git diff analysis.
+
+Smart doc analysis is always active in standard mode: identify which `docs/` files are relevant to the changed code by path, feature name, and cross-references — read only those, never all docs.
 
 Print resolved scope, then proceed without waiting.
 
@@ -198,11 +207,34 @@ Do NOT start the shared stack — agents start their own isolated environments.
 
 ## Phase 3 — Autonomous Feature Identification & Discovery
 
-All identification is fully autonomous — derive everything from the code diff and codebase. Never ask the user what to test.
+All identification is fully autonomous — derive everything from the code diff, codebase, or guided source. Never ask the user what to test.
+
+### Standard mode (no `guided` argument)
 
 1. Get changed files from git based on scope arguments — **include related projects** (`relatedProjects[].path`) when tracing cross-project dependencies (e.g., backend API change that affects webapp pages)
 2. **File reference processing**: if `file:<path>` was provided, read the `.md` file. Extract feature descriptions, acceptance criteria, endpoints, edge cases, and any test scenarios described in the doc. This supplements (doesn't replace) diff-based discovery — merge file reference insights with diff analysis.
-3. Read every changed file. For each, build a **feature map**:
+
+### Guided mode (`guided` argument present)
+
+**Validate combinability first**: if `guided` is combined with `staged`, `unstaged`, `N` (number), or `working-tree`, STOP and tell the user: "The `guided` argument bypasses git diff analysis and cannot be combined with git-scope arguments (`staged`, `unstaged`, `N`, `working-tree`). Use `guided` alone, `guided "description"`, or `guided file:<path>`. You may combine `guided` with `rescan`."
+
+1. **Resolve guided source**:
+   - If `guided file:<path>` — validate the `.md` file exists relative to project root. Read it. This is **doc-based** guided mode.
+   - If `guided "description"` — capture the description string. This is **description-based** guided mode.
+   - If `guided` alone (no file or description) — use `AskUserQuestion` to prompt:
+     - **Option 1**: "Pick a doc file" — list `.md` files from `docs/` and `_autonomous/pending-guided-tests/` (if they exist) for the user to choose from. Once chosen → doc-based mode.
+     - **Option 2**: "Describe a feature or workflow" — free text input. Once provided → description-based mode.
+
+2. **Deep feature analysis** — trace the guided feature through the codebase:
+   - Extract keywords, feature names, endpoint patterns, model names, and workflow steps from the guided source (doc content or description)
+   - **Filename search**: use Glob to find files with names matching feature keywords (e.g., `*payment*`, `*checkout*`, `*order*`)
+   - **Content search**: use Grep to search for routes, handlers, models, services, and middleware matching feature keywords (e.g., `/api/payment`, `PaymentService`, `OrderModel`)
+   - **Read all identified files** — build the complete picture of how the feature works across the codebase
+   - Follow imports and dependencies to trace the full execution path (controllers → services → models → middleware → validators)
+
+### Common steps (both modes)
+
+3. For each identified file (from diff in standard mode, or from deep analysis in guided mode), build a **feature map**:
    - API endpoints affected (routes, controllers, handlers)
    - Database operations — distinguish by type:
      - **MongoDB**: `find`, `findOne`, `aggregate`, `insertMany`, `insertOne`, `updateOne`, `updateMany`, `deleteOne`, `deleteMany`, `bulkWrite`, `createIndex`, collection creation, Mongoose/Typegoose schema changes
@@ -226,7 +258,7 @@ All identification is fully autonomous — derive everything from the code diff 
 
    **c. Fix completion scan**: Scan pending-fixes docs for `### Resolution` blocks. Items with `Status: RESOLVED` and `Verification: PASS` become **regression targets** — add them to the test plan for re-verification. Scan the `documentation.fixResults` directory for documents with `Ready for Re-test: YES` — these are **priority re-test targets** from recent fix cycles and should be tested first.
 
-6. Produce a **Feature Context Document** (kept in memory, not written to disk) summarizing: all features touched, all endpoints, all DB collections/tables affected, all external services involved, all edge cases identified from reading the code (error handlers, validation branches, race conditions, retry logic), prior test history from `_autonomous/` scans, file reference content (if provided), and available capabilities from config. This document is cascaded to every agent in Phase 5.
+6. Produce a **Feature Context Document** (kept in memory, not written to disk) summarizing: all features touched, all endpoints, all DB collections/tables affected, all external services involved, all edge cases identified from reading the code (error handlers, validation branches, race conditions, retry logic), prior test history from `_autonomous/` scans, file reference content (if provided), and available capabilities from config. **If guided mode**: include at the top of the document: `Mode: guided (doc-based|description-based)`, `Source: <file path or description text>`. This document is cascaded to every agent in Phase 5.
 
 ## Phase 4 — Test Plan (Plan Mode)
 
@@ -243,10 +275,15 @@ All identification is fully autonomous — derive everything from the code diff 
 - Port assignments per agent (from Phase 2)
 - Initialization commands
 - Related project inclusion map (which suites need which related projects)
+- If guided mode: the guided mode type (`doc-based` or `description-based`) and the source (file path or description text)
 
 This ensures that when context is cleared after plan approval, the executing agent can fully reconstruct the session state.
 
-Then design test suites covering **all** of the following categories:
+**Test category scope depends on mode:**
+- **Standard mode** or **guided doc-based**: design test suites covering **all** 9 categories below.
+- **Guided description-based**: design test suites covering only **category 1** (happy path) and **category 7** (security). API Response Security Inspection, finding verification, and anomaly detection still apply to all tests.
+
+Then design test suites covering the applicable categories:
 
 1. **Happy path** — normal expected flows end-to-end
 2. **Invalid inputs & validation** — malformed data, missing fields, wrong types, boundary values

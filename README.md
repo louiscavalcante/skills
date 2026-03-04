@@ -9,9 +9,9 @@ Reusable, project-agnostic skills that extend Claude Code with specialized auton
 
 | Skill | Description | Model | Install |
 |---|---|---|---|
-| [autonomous-tests](autonomous-tests/) | Autonomous E2E test runner — analyzes diffs, generates test plans, and executes suites in parallel via Agent Teams | Opus 4.6 | `npx skills add louiscavalcante/skills --skill autonomous-tests` |
+| [autonomous-tests](autonomous-tests/) | Autonomous E2E test runner — analyzes diffs or traces guided features, generates test plans, and executes suites sequentially via Agent Teams | Opus 4.6 | `npx skills add louiscavalcante/skills --skill autonomous-tests` |
 | [autonomous-fixes](autonomous-fixes/) | Autonomous fix runner — reads test findings, applies fixes via Agent Teams, and updates docs for re-testing (test-fix loop) | Opus 4.6 | `npx skills add louiscavalcante/skills --skill autonomous-fixes` |
-| [autonomous-tests-swarm](autonomous-tests-swarm/) | Autonomous E2E test runner with per-agent Docker isolation — each agent spins up its own database, API, and services on unique ports for true parallel testing | Opus 4.6 | `npx skills add louiscavalcante/skills --skill autonomous-tests-swarm` |
+| [autonomous-tests-swarm](autonomous-tests-swarm/) | Autonomous E2E test runner with per-agent Docker isolation and guided mode — each agent spins up its own stack for true parallel testing | Opus 4.6 | `npx skills add louiscavalcante/skills --skill autonomous-tests-swarm` |
 
 ## Getting Started
 
