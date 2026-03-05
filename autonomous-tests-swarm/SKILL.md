@@ -167,12 +167,16 @@ Spawn ONE general-purpose agent. Agent performs:
 1. **Production scan**: `.env` files for `productionIndicators`, `*LIVE*SECRET*`, `NODE_ENV=production`, production DB endpoints, non-local URLs. Show variable NAME only.
 2. Run `sandboxCheck` commands from config
 3. Verify Docker is local
-4. Verify Docker context matches `swarm.dockerContext` (switch if needed)
-5. Create `/tmp/autonomous-swarm-{sessionId}` (`date -u +%Y%m%d%H%M%S` for sessionId)
-6. Scan port ranges from `swarm.portRangeStart` per agent via `ss -tlnp`/`netstat -tlnp` or socket test. Skip conflicts.
-7. Reserve and store assignments
-8. Validate: compose → `docker compose -f {file} config --quiet`; raw Docker → `docker image inspect || docker pull`; disk space → `docker system df`
-9. If `swarm.audit.enabled` (default true): `mkdir -p .../audit/`, write `session.json` (`schemaVersion: "1.0"`, sessionId, timestamp, branch, scope, agent count, limits)
+4. **Related project safety scan**: For each `relatedProjects[]` entry with a `path`:
+   - Scan `.env` files in the related project path for the same production indicators (`productionIndicators`, `*LIVE*SECRET*`, `NODE_ENV=production`, production DB endpoints, non-local URLs)
+   - Show variable NAME + related project name if found
+   - Any production indicator in a related project triggers the same **ABORT** gate as the main project
+5. Verify Docker context matches `swarm.dockerContext` (switch if needed)
+6. Create `/tmp/autonomous-swarm-{sessionId}` (`date -u +%Y%m%d%H%M%S` for sessionId)
+7. Scan port ranges from `swarm.portRangeStart` per agent via `ss -tlnp`/`netstat -tlnp` or socket test. Skip conflicts.
+8. Reserve and store assignments
+9. Validate: compose → `docker compose -f {file} config --quiet`; raw Docker → `docker image inspect || docker pull`; disk space → `docker system df`
+10. If `swarm.audit.enabled` (default true): `mkdir -p .../audit/`, write `session.json` (`schemaVersion: "1.0"`, sessionId, timestamp, branch, scope, agent count, limits)
 
 Agent reports: safety assessment, port assignments, validation results, audit status.
 

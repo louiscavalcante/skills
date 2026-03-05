@@ -87,6 +87,10 @@ Print resolved scope, then proceed without waiting.
 
 **Step 3 — Findings Scan**: Delegate to Explore agent. Scan configured `_autonomous/` directories (`documentation.pendingFixes`, `documentation.testResults`, `documentation.fixResults`). Report: pending-fixes count, test-results with `### Requires Fix` or `### Vulnerabilities`, prior fix-results. If no actionable findings → **STOP**: "No findings. Run `/autonomous-tests` first."
 
+**Step 4 — Resume Detection**: Delegate to agent. Run `git diff --name-only` and cross-reference modified files against finding source files from Step 3. If fixes appear already applied (modified files overlap with files referenced in findings):
+- Print: "Fixes detected in working tree. Skipping to Phase 4 (Verification & Documentation)."
+- Execute ALL Phase 4 substeps (4a → 4b → 4c) — no shortcuts.
+
 ---
 
 ## Phase 1 — Findings (User Selection Gate)
@@ -114,7 +118,7 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
 1. All selected items (ID, title, source file, severity, category, OWASP for V-prefix)
 2. Fix Context Documents — condensed per item (root cause, affected files, code path, fix design)
 3. Concrete per-item agent spawn instructions (source paths, fix steps, verification commands, expected outcomes)
-4. Full Phase 3/4/5 instructions with resolved values — no "see above"
+4. Full Phase 3/4 instructions with resolved values — no "see above"
 5. Config paths: `documentation.fixResults`, `documentation.pendingFixes`, `documentation.testResults`, `database.connectionCommand`, `testing.unitTestCommand`
 6. CLAUDE.md file list from Phase 0 Step 2
 
@@ -133,6 +137,19 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
        f. Next item
   PROHIBITED: multiple agents alive, spawning N+1 before N shutdown, parallel execution, main-conversation fixes
   SHUTDOWN: SendMessage shutdown_request to all teammates after completion
+  ```
+
+- Post-Fix Checklist (embed verbatim in every plan):
+  ```
+  ## Post-Fix Checklist
+  1. [ ] 4a: Verification agent confirms tests pass
+  2. [ ] 4b: Fix-results doc created at `documentation.fixResults`
+  3. [ ] 4b: Resolution blocks appended to pending-fixes
+  4. [ ] 4b: Test-results updated for T-prefix items (if applicable)
+  5. [ ] 4c: Loop signal printed
+  6. [ ] 4c: Source cleanup eligibility checked -> AskUserQuestion if all resolved
+  7. [ ] 4c: Unresolved V-prefix warnings printed (if applicable)
+  8. [ ] 4c: `/clear` reminder printed
   ```
 
 **Setup agent** (MANDATORY): Spawn setup agent (`general-purpose`, `model: "opus"`, `team_name`) to read all source files referenced by findings, compile Fix Context Documents, read discovered CLAUDE.md files for architecture context, report via `SendMessage`. Shut down after reporting. **Orchestrator MUST embed the setup agent's Fix Context Documents into the plan text** — condensed but complete.
@@ -205,8 +222,9 @@ Delegate to agent. Timestamp via `date -u +"%Y-%m-%d-%H-%M-%S"`. Read `reference
 - **Test-results updates**: append fix-applied status to T-prefix entries
 - **V-prefix**: include `### Security Impact` (OWASP, attack vector, regulatory impact, mitigation, related patterns, residual risk)
 
-### 4c. Loop Signal
+### 4c. Loop Signal & Finalize
 
+Print fix cycle summary:
 ```
 ## Fix Cycle Complete
 - Items attempted: {N} | Resolved: {N} | Partial: {N} | Unable: {N}
@@ -215,9 +233,7 @@ Re-run autonomous-tests to verify: `/autonomous-tests`
 
 If `Ready for Re-test: YES` → inform user re-testing will be prioritized.
 
-### 4d. Source Document Cleanup
-
-Check resolution status per source document:
+**Source Document Cleanup**: Check resolution status per source document:
 - Pending-fixes: every `## Fix N:` has `### Resolution` with `Status: RESOLVED` + `Verification: PASS`
 - Test-results `### Requires Fix`: every entry has fix-applied annotation
 - Test-results `### Vulnerabilities`/`### API Response Security`: every entry `Status: RESOLVED`
@@ -226,7 +242,7 @@ All resolved → offer removal via `AskUserQuestion` ("Fix-results preserved as 
 
 **Vulnerability warning** (unresolved V-prefix):
 ```
-⚠️ UNRESOLVED SECURITY FINDINGS — manual attention required:
+WARNING: UNRESOLVED SECURITY FINDINGS — manual attention required:
 1. Data leaks — {V-prefix items}
 2. Credential exposure — {V-prefix items}
 3. Privilege escalation — {V-prefix items}
@@ -234,11 +250,9 @@ All resolved → offer removal via `AskUserQuestion` ("Fix-results preserved as 
 5. Compliance violations — {V-prefix items}
 ```
 
----
-
-## Phase 5 — Finalize
-
 > **Important**: Run `/clear` before invoking another skill to free context tokens and prevent stale state.
+
+Phase 4c is the LAST step. There is no Phase 5.
 
 ---
 
@@ -256,3 +270,4 @@ All resolved → offer removal via `AskUserQuestion` ("Fix-results preserved as 
 - Reuse `.claude/autonomous-tests.json` — no separate config
 - No Docker MCPs where `safe: false`
 - V-prefix: always enhanced context + verification + documentation
+- Documentation (4b) is NOT the end — 4c (loop signal + cleanup + finalize) is MANDATORY. Never stop after generating docs.

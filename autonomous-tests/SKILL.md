@@ -147,9 +147,13 @@ Spawn ONE **general-purpose agent** (`model: "opus"`, no `team_name`) to perform
 1. **Production scan**: `.env` files for `productionIndicators`, `*LIVE*SECRET*`, `NODE_ENV=production`, production DB endpoints (RDS, Atlas without dev/stg/test), non-local URLs. Show variable NAME only.
 2. Run `sandboxCheck` commands from config.
 3. Verify Docker is local.
-4. **Service startup**: per service in config + related projects with `startCommand`: health check → healthy: `already-running` → unhealthy: start + poll 5s/30s → `started-this-run` or report failure.
-5. Start webhook listeners.
-6. **Service Readiness Report**: per service — name, URL/port, health status, health check endpoint, source (`config`|`relatedProject`).
+4. **Related project safety scan**: For each `relatedProjects[]` entry with a `path`:
+   - Scan `.env` files in the related project path for the same production indicators (`productionIndicators`, `*LIVE*SECRET*`, `NODE_ENV=production`, production DB endpoints, non-local URLs)
+   - Show variable NAME + related project name if found
+   - Any production indicator in a related project triggers the same **ABORT** gate as the main project
+5. **Service startup**: per service in config + related projects with `startCommand`: health check → healthy: `already-running` → unhealthy: start + poll 5s/30s → `started-this-run` or report failure.
+6. Start webhook listeners.
+7. **Service Readiness Report**: per service — name, URL/port, health status, health check endpoint, source (`config`|`relatedProject`).
 
 Agent reports: safety assessment + Service Readiness Report. Gates: **ABORT** if production. **STOP** if unhealthy. Keep report for Phase 3.
 

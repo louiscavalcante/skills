@@ -1,5 +1,16 @@
 # Release Notes
 
+## v1.13.0 (2026-03-05)
+
+### Added
+- **Resume Detection** (autonomous-fixes Phase 0 Step 4): When invoked after a manual fix, `git diff --name-only` is cross-referenced against finding source files. If fixes are already applied in the working tree, skips directly to Phase 4 (Verification & Documentation) — executing all substeps (4a → 4b → 4c) without shortcuts.
+- **Post-Fix Checklist** (autonomous-fixes Phase 2): Every plan now embeds a verbatim checklist of all post-fix steps (4a verification, 4b documentation, 4c loop signal + cleanup + finalize). Survives context compression and ensures no step is skipped after fixes are applied.
+- **Related project production safety scan** (autonomous-tests + swarm Phase 1): The environment safety agent now scans `.env` files in every `relatedProjects[]` path for the same production indicators checked in the main project. A production indicator in any related project triggers the same ABORT gate. Previously, only the main project's environment was checked.
+
+### Changed
+- **Merged Phase 5 into Phase 4c** (autonomous-fixes): Phase 4c "Loop Signal", Phase 4d "Source Document Cleanup", and Phase 5 "Finalize" consolidated into a single **4c. Loop Signal & Finalize** step. Phase 4c is now explicitly the LAST step — there is no Phase 5.
+- **Hard rule: never stop after docs** (autonomous-fixes): New rule in the Rules section — "Documentation (4b) is NOT the end — 4c (loop signal + cleanup + finalize) is MANDATORY. Never stop after generating docs."
+
 ## v1.12.0 (2026-03-05)
 
 ### Added
