@@ -69,15 +69,17 @@ The main agent is the Orchestrator. It coordinates phases but NEVER executes ope
 | `working-tree` | Staged + unstaged changes (same as default) |
 | `file:<path>` | `.md` doc as additional test context. Combinable. |
 | `rescan` | Force re-scan capabilities. Combinable. |
-| `guided` | Feature/workflow-centric discovery — bypasses git diff. Alone: prompts user. |
-| `guided "description"` | Description-based guided mode — happy path + security only. |
-| `guided file:<path>` | Doc-based guided mode — full 9-category coverage. |
+| `guided` | User augmentation mode (single-agent) — bypasses git diff. Alone: prompts user. |
+| `guided "description"` | Description-based: happy-path workflows only, user performs actions. Single-agent. |
+| `guided file:<path>` | Doc-based: happy-path workflows only, user performs actions. Single-agent. |
 
 Args are space-separated. `file:` prefix detected, path validated as existing `.md` relative to project root. Combinable (e.g., `staged file:docs/feature.md rescan`).
 
-**Guided mode** — two sub-modes:
-- **Doc-based** (`guided file:<path>` or pick from `docs/`/`_autonomous/pending-guided-tests/`): full 9-category coverage.
-- **Description-based** (`guided "description"` or describe when prompted): happy path + security, API response inspection, finding verification, anomaly detection.
+**Guided mode** — user augmentation (NOT automation):
+- **Doc-based** (`guided file:<path>` or pick from `docs/`/`_autonomous/pending-guided-tests/`): happy-path workflows only.
+- **Description-based** (`guided "description"` or describe when prompted): happy-path workflows only.
+
+User performs all actions on their real device/browser. Claude provides step-by-step instructions and verifies results via DB queries/API/logs. Only happy-path workflows in guided mode. Categories 2-9 handled exclusively in autonomous mode — NEVER in guided session. No agent-browser, no Playwright — guided mode never loads or uses browser automation tools. **Single agent execution** — guided mode overrides the parallel protocol. Spawn ONE agent at a time, sequentially.
 
 `guided` alone prompts via `AskUserQuestion`. Combinable with `rescan` but **NOT** with `staged`/`unstaged`/`N`/`working-tree`.
 
@@ -193,13 +195,13 @@ Spawn ONE Explore agent (`subagent_type: "Explore"`, no `team_name`).
    - **Edge case inventory**: error handlers, validation branches, race conditions, retry logic
 4. Receive agent report
 
-### Guided mode
+### Guided mode (user augmentation — single agent)
 
 **Validate**: `guided` + `staged`/`unstaged`/`N`/`working-tree` → STOP with error message. Combinable with `rescan` only.
 
 1. **Resolve source**: `guided file:<path>` → doc-based; `guided "description"` → description-based; `guided` alone → `AskUserQuestion` (pick doc or describe)
-2. Spawn Explore agent with guided source + mode type + same context as standard. Agent performs deep feature analysis (keywords → Glob/Grep → read → trace imports) plus same feature map, dependency, doc analysis, edge case work.
-3. Receive report
+2. Spawn Explore agent with guided source + mode type + same context as standard. Agent performs deep feature analysis (keywords → Glob/Grep → read → trace imports) plus same feature map, dependency, doc analysis, edge case work. Agent also identifies: DB seed requirements per test, external service setup needs, prerequisite state for each happy-path workflow.
+3. Receive report. Orchestrator extracts only happy-path workflows — discard security, edge case, validation, race condition findings (those are autonomous-only).
 
 ### Feature Context Document (both modes)
 
@@ -209,9 +211,20 @@ Compile from agent report (do NOT re-read analyzed files). Contains: features, e
 
 **Enter plan mode.** Plan starts with:
 
-**Step 0 — Context Reload**: re-read SKILL.md, config, templates (`autonomous-tests/references/templates.md`). Restore: resolved `$ARGUMENTS`, branch, commit range, Phase 2 findings, `userContext`, swarm config, port assignments, init commands, related project map. If guided: type + source.
+**Step 0 — Context Reload**: re-read SKILL.md, config, templates (`autonomous-tests/references/templates.md`). Restore: resolved `$ARGUMENTS`, branch, commit range, Phase 2 findings, `userContext`, swarm config, port assignments, init commands, related project map. If guided: type, source, and full guided test list with per-test seed requirements.
 
-- Execution Protocol (embed verbatim — orchestrator uses this after context reset):
+**Tool loading gate**: If autonomous mode needs agent-browser/Playwright, list tools and prompt user via AskUserQuestion before plan approval. Declined tools excluded from plan. Guided mode: NEVER include browser automation tools — skip this gate entirely.
+
+**Self-containment mandate** — the plan MUST embed directly (not reference "above" or prior phases):
+1. All test suites with full details (name, objective, pre-conditions, steps, expected outcomes, teardown, verification)
+2. Feature Context Document (condensed but complete)
+3. Service Readiness Report from Phase 1 (port assignments, health status)
+4. Per-suite agent spawn instructions with resolved values (swarm-{N} spec, ports, Docker context, compose path, capabilities snapshot, Feature Context Document)
+5. Config paths: `documentation.*`, `database.connectionCommand`, `testing.unitTestCommand`, `testDataPrefix`
+6. Swarm config: port assignments, init commands, related project map
+7. If guided: per-test DB seed commands, user-facing step-by-step instructions, and verification queries
+
+- Execution Protocol — autonomous mode (embed verbatim — orchestrator uses this after context reset):
   ```
   TEAM: TeamCreate → general-purpose team (team_name for all agents)
   MODEL: Always model: "opus"
@@ -230,7 +243,24 @@ Compile from agent report (do NOT re-read analyzed files). Contains: features, e
   SHUTDOWN: SendMessage type: "shutdown_request" to all teammates
   ```
 
-**Categories** — standard/doc-based: all 9; description-based: 1 + 7 only (anomaly detection, finding verification, API security inspection still apply):
+- Execution Protocol — guided mode (embed verbatim):
+  ```
+  MODE: User augmentation
+  NO BROWSER AUTOMATION: agent-browser and Playwright MUST NOT be loaded
+  NO PARALLEL AGENTS: Guided mode overrides parallel protocol. One agent at a time, sequential.
+  CATEGORIES: Happy-path workflows ONLY
+  FLOW: For each guided test (in order):
+    1. Spawn ONE agent for DB seeding + external service setup
+    2. Agent seeds database, configures services
+    3. Agent reports readiness → shut down
+    4. Orchestrator presents steps to user via AskUserQuestion
+    5. User performs actions on real device/browser
+    6. Orchestrator verifies results via DB queries/API/logs
+    7. Record PASS/FAIL → next test
+  PROHIBITED: agent-browser, Playwright, parallel agents, security/edge-case/validation tests
+  ```
+
+**Test categories** — standard (autonomous): all 9. Guided mode (both sub-modes): category 1 ONLY. Categories 2-9 never in guided. Non-happy-path findings queued as pending-autonomous-tests.
 
 1. **Happy path** — normal flows end-to-end
 2. **Invalid inputs & validation** — malformed data, missing fields, wrong types, boundaries
@@ -252,7 +282,9 @@ Each suite: name, objective, pre-conditions, steps + expected outcomes, teardown
 
 **Cascading context**: every agent gets full Feature Context Document from Phase 2.
 
-**Capability-aware execution**: `agent-browser` first for UI if available → Playwright fallback → `mcp-add` safe MCPs → **External CLI gate**: prompt user once per service via `AskUserQuestion`, approved → `allowedOperations` only, declined → mark as "guided". Never use `safe: false` MCPs or `cli.blocked` CLIs.
+**Capability-aware execution (autonomous mode ONLY)**: `agent-browser` first for UI if available → Playwright fallback → `mcp-add` safe MCPs → **External CLI gate**: prompt user once per service via `AskUserQuestion`, approved → `allowedOperations` only, declined → mark as "guided". Never use `safe: false` MCPs or `cli.blocked` CLIs.
+
+**Guided mode execution**: No browser automation. No parallel agents. User performs all UI interactions. Swarm Docker isolation NOT used in guided mode — tests run against shared local stack.
 
 **Anomaly detection**: duplicate records, unexpected DB changes, warning/error logs, slow queries, orphaned refs, auth anomalies, response anomalies. **Finding verification mandatory** — read source to confirm. Unconfirmed → `Severity: Unverified` in `### Unverified` subsection.
 
@@ -357,6 +389,11 @@ When `swarm.audit.enabled`: append "Execution Audit" section (agent count, durat
 | Capabilities freeze in suite agents | Phase 4 |
 | Audit logs when enabled | Phases 4-5 |
 | Only orchestrator writes `docs/_autonomous/` | Phase 5 |
+| Guided = user augmentation | No browser automation in guided mode — user performs all actions |
+| Guided = happy path only | Category 1 only in guided mode — categories 2-9 autonomous-only |
+| Tool loading gate | Browser tools need pre-plan approval in autonomous mode, never in guided |
+| Plan self-containment | All context embedded in plan for post-reset survival — no "see above" references |
+| Guided = single agent | Override parallel protocol — one agent at a time in guided mode |
 
 ## Operational Bounds
 

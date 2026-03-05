@@ -1,5 +1,14 @@
 # Release Notes
 
+## v1.11.0 (2026-03-04)
+
+### Changed
+- **Guided mode redesign** (autonomous-tests + swarm): Guided mode is now strictly user augmentation — user performs actions on real device/browser while Claude provides step-by-step instructions and verifies results via DB queries/API. No agent-browser or Playwright in guided mode. Before each test, an agent seeds the database and configures external services. Only happy-path workflows (category 1) in guided sessions; categories 2-9 are autonomous-only.
+- **Guided mode single-agent** (autonomous-tests-swarm): Guided mode overrides parallel execution — spawns one agent at a time sequentially, since user can't benefit from parallel agents.
+- **Tool loading gate** (autonomous-tests + swarm): Browser automation tools (agent-browser, Playwright) now require explicit user approval before plan finalization. Never prompted in guided mode.
+- **Plan self-containment mandate** (all three skills): Plans must embed all context needed for post-context-reset survival: test suites/fix items with full details, Feature Context/Fix Context Documents (condensed), per-suite/per-item agent spawn instructions with resolved values, config paths, and service readiness data. No references to "above" or prior phases.
+- **autonomous-fixes plan enrichment**: Setup agent's Fix Context Documents must be embedded in plan text. Plan now requires concrete per-item spawn instructions with file paths, fix steps, verification commands, and expected outcomes.
+
 ## v1.10.1 (2026-03-04)
 
 ### Fixed

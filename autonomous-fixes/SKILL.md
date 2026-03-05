@@ -110,6 +110,14 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
 
 **Step 0 — Context Reload** (for post-approval reconstruction): Re-read SKILL.md, config, templates. Record: resolved arguments (`$ARGUMENTS`), branch, selected items (IDs, titles, sources), key finding context, user notes.
 
+**Self-containment mandate** — the plan MUST embed directly (not reference "above" or prior phases):
+1. All selected items (ID, title, source file, severity, category, OWASP for V-prefix)
+2. Fix Context Documents — condensed per item (root cause, affected files, code path, fix design)
+3. Concrete per-item agent spawn instructions (source paths, fix steps, verification commands, expected outcomes)
+4. Full Phase 3/4/5 instructions with resolved values — no "see above"
+5. Config paths: `documentation.fixResults`, `documentation.pendingFixes`, `documentation.testResults`, `database.connectionCommand`, `testing.unitTestCommand`
+6. CLAUDE.md file list from Phase 0 Step 2
+
 - Execution Protocol (embed verbatim — orchestrator uses this after context reset):
   ```
   TEAM: TeamCreate → fix team (team_name for all agents)
@@ -127,14 +135,14 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
   SHUTDOWN: SendMessage shutdown_request to all teammates after completion
   ```
 
-**Setup agent** (MANDATORY): Spawn setup agent (`general-purpose`, `model: "opus"`, `team_name`) to read all source files referenced by findings, compile Fix Context Documents, read discovered CLAUDE.md files for architecture context, report via `SendMessage`. Shut down after reporting.
+**Setup agent** (MANDATORY): Spawn setup agent (`general-purpose`, `model: "opus"`, `team_name`) to read all source files referenced by findings, compile Fix Context Documents, read discovered CLAUDE.md files for architecture context, report via `SendMessage`. Shut down after reporting. **Orchestrator MUST embed the setup agent's Fix Context Documents into the plan text** — condensed but complete.
 
 **Fix Context Document per item**:
 1. Verify finding reproduces — if code changed and issue gone → `Status: ALREADY_RESOLVED`, skip
-2. Read referenced files (endpoint, model, test)
-3. Trace code path: input → processing → output
-4. Identify root cause
-5. Design fix
+2. Read referenced files (endpoint, model, test) — record file paths
+3. Trace code path: input → processing → output — summarize path
+4. Identify root cause — state explicitly
+5. Design fix — concrete steps with file:line references
 
 **V-prefix enhanced context**: Trace full I/O path for affected handler. Identify ALL user-controlled inputs reaching vulnerable code. Check related patterns in same file/module. Assess regulatory exposure. Design security-aware remediation: DTO filtering, validation/sanitization layers, rate limiting, protective guards.
 
