@@ -1,5 +1,14 @@
 # Release Notes
 
+## v1.12.0 (2026-03-05)
+
+### Added
+- **Targeted regression mode** (autonomous-tests + swarm): When re-running after `autonomous-fixes` applies fixes (`Ready for Re-test: YES`), the testing skills now automatically activate regression mode. Instead of re-testing the entire feature/workflow blast radius, they analyze the fix scope (files modified, 1-hop callers/callees) and generate only 2 targeted suites: "Fix Verification" (re-execute exact original failure scenarios) and "Impact Zone" (test direct dependencies for side-effects). Previously validated areas unaffected by the fix are excluded.
+- **Regression Scope Analysis** (Phase 2, both testing skills): New conditional step after the Explore agent returns. Detects re-test indicators, compiles a fix manifest, computes 1-hop impact zone, cross-references prior test results for pass/fail mapping, and produces a Targeted Regression Context Document that replaces the Feature Context Document for Phase 3.
+- **Blast radius escape hatch**: If modified files' 1-hop zone covers >60% of the feature map, regression mode falls back to full-scope testing automatically.
+- **`Original Test IDs` field** (autonomous-fixes fix-results template): Fix-results now record the original test IDs from source findings, enabling direct cross-referencing during regression scope analysis. Backward-compatible — legacy fix-results without this field fall back to `Source` path cross-referencing.
+- **Swarm efficiency note** (autonomous-tests-swarm): Regression mode plans note when <=2 suites make swarm Docker overhead potentially excessive.
+
 ## v1.11.0 (2026-03-04)
 
 ### Changed

@@ -166,6 +166,7 @@ Execution is **STRICTLY SEQUENTIAL** — one agent at a time.
 2. Run unit tests if configured (`testing.unitTestCommand`)
 3. Verify with targeted checks (API calls, DB queries, log inspection)
 4. Report: RESOLVED / PARTIAL / UNABLE with details
+5. Record `Original Test IDs` from source finding's `Test ID` field into fix-results documentation
 
 **V-prefix additional instructions**:
 1. Enforce DTO/serializer filtering — remove sensitive data from responses

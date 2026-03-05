@@ -175,7 +175,30 @@ Fully autonomous — derive from code diff, codebase, or guided source. Never as
 2. **Spawn Explore agent** with: source content, mode type, `relatedProjects[]`, `testing.contextFiles`, CLAUDE.md paths, `documentation.*` paths. Agent performs: deep feature analysis (keywords, endpoints, models, workflows via Glob/Grep, import tracing) + same feature map/dependency/doc analysis/edge cases as standard. Agent also identifies: DB seed requirements per test, external service setup needs, prerequisite state for each happy-path workflow.
 3. Receive report. Orchestrator extracts only happy-path workflows — discard security, edge case, validation, race condition findings (those are autonomous-only).
 
-### Feature Context Document (both modes)
+### Regression Scope Analysis (conditional — after Explore report)
+
+Check the Explore agent's report for re-test indicators:
+- Fix-results entries with `Ready for Re-test: YES`
+- Pending-fixes entries with `### Resolution` → `Status: RESOLVED` + `Verification: PASS`
+
+**If NEITHER found** → skip, compile normal Feature Context Document below.
+
+**If FOUND** → Regression mode. Orchestrator compiles from the Explore report (no additional agent — this is a filtering/cross-referencing operation on data already gathered):
+
+1. **Fix manifest**: per resolved item — ID, title, files modified, what was done, source path, original test IDs, verification details. V-prefix: add OWASP + attack vector.
+2. **1-hop impact zone**: from the Explore agent's dependency graph, extract only direct callers and direct callees of each modified file. Discard beyond 1-hop.
+3. **Prior test mapping**: cross-reference `Source` paths and `Original Test IDs` against test-results to identify which suites and test IDs originally failed. If `Original Test IDs` absent (legacy fix-results), fall back to parsing `Source` path → open pending-fixes → extract `Test ID`.
+4. **Prior pass mapping**: from the same test-results docs, extract suites/tests that PASSED — these are candidates for exclusion.
+5. **Blast radius check**: if modified files' combined 1-hop zone covers >60% of the feature map → fall back to full Feature Context Document, note "blast radius exceeds regression threshold — running full scope."
+
+Compile **Targeted Regression Context Document** (replaces Feature Context Document for Phase 3):
+- Regression mode header (type, fix-results source path, original test-results path, fix date, item count)
+- Fix manifest (per item: ID, title, files modified, description, original test IDs, 1-hop callers/callees)
+- Regression test scope: Required tests (verify fix scenarios + 1-hop impact) and Excluded areas (unaffected suites from original run, with reason)
+- Prior passing tests summary (context for agents — avoid re-testing)
+- Environment/capabilities (same as Feature Context Document)
+
+### Feature Context Document (standard/guided modes — skipped in regression mode)
 Compile from Explore report (do NOT re-read files). Contents: features, endpoints, DB collections/tables, external services, edge cases, test history, file reference content, capabilities. Guided mode adds `Mode` + `Source` at top. Cascaded to every Phase 4 agent.
 
 ## Phase 3 — Plan (Plan Mode)
@@ -188,6 +211,7 @@ Compile from Explore report (do NOT re-read files). Contents: features, endpoint
 - Findings: Phase 2 discoveries (modules, endpoints, dependencies)
 - User context: flaky areas, priorities, notes
 - Service Readiness Report from Phase 1 (agents use directly, MUST NOT start services or re-check health)
+- If regression mode: fix manifest, 1-hop impact zone, original test IDs, Targeted Regression Context Document
 - If guided: type, source, and full guided test list with per-test seed requirements
 
 **Tool loading gate**: If autonomous mode needs agent-browser/Playwright, list tools and prompt user via AskUserQuestion before plan approval. Declined tools excluded from plan. Guided mode: NEVER include browser automation tools — skip this gate entirely.
@@ -250,7 +274,16 @@ Compile from Explore report (do NOT re-read files). Contents: features, endpoint
 8. **Edge cases from code reading** — test every `if/else`, `try/catch`, guard clause, fallback
 9. **Regression** — existing unit tests + re-verify previously broken flows
 
-Each suite: name, objective, pre-conditions, steps + expected outcomes, teardown, verification queries. **Wait for user approval.**
+Each suite: name, objective, pre-conditions, steps + expected outcomes, teardown, verification queries.
+
+**Regression mode scoping**: When the plan receives a Targeted Regression Context Document:
+- Suite 1 "Fix Verification" (always): one test per fixed item — re-execute the exact original failure scenario using original test IDs as reference
+- Suite 2 "Impact Zone" (conditional): tests for 1-hop callers/callees — only categories where modified code is relevant (e.g., validation fix → Category 2; auth fix → Categories 4, 7; DB fix → Category 5). Skip categories with no code path overlap.
+- No other suites — unaffected areas excluded
+- State in plan: "Targeted regression re-test — scope limited to fix verification and 1-hop impact zone"
+- Execution protocol: unchanged (same TeamCreate/sequential flow, just fewer suites)
+
+**Wait for user approval.**
 
 ## Phase 4 — Execution (Agent Teams)
 

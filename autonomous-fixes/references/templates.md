@@ -32,6 +32,7 @@ Reference file for Phase 5 documentation. Follow these structures exactly when g
 | Source | `{path to pending-fixes or test-results doc}` |
 | Status | {RESOLVED / PARTIAL / UNABLE} |
 | Files Modified | `{path1}`, `{path2}` |
+| Original Test IDs | {1.2, 4.1 — from source finding's Test ID field, or "N/A" for V-prefix} |
 | Verification | {PASS / FAIL} |
 
 **What was done**: {description of the fix applied}
@@ -47,7 +48,7 @@ Reference file for Phase 5 documentation. Follow these structures exactly when g
 - {New findings discovered during fix cycle, if any}
 ```
 
-**Rules**: One `### {ID}: {Title}` section per item. ID uses the assigned prefix (F/V/T). `---` between items. Always include `## Fix Cycle Metadata` and `## Next Steps`. If `Ready for Re-test: YES`, autonomous-tests will prioritize re-testing on next run.
+**Rules**: One `### {ID}: {Title}` section per item. ID uses the assigned prefix (F/V/T). `---` between items. Always include `## Fix Cycle Metadata` and `## Next Steps`. If `Ready for Re-test: YES`, autonomous-tests will prioritize re-testing on next run. Populate `Original Test IDs` from the source pending-fixes `Test ID` field. For T-prefix items, use the test ID from the test-results entry directly. For V-prefix, use "N/A — vulnerability".
 
 ---
 

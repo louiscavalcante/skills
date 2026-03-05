@@ -300,6 +300,10 @@ Phase 8: Cleanup         ← Remove test data, verify Docker cleanup
 Phase 9: Advisory        ← Remind user to /clear before next skill
 ```
 
+### Targeted Regression Mode
+
+When re-running after `autonomous-fixes` has applied fixes (fix-results with `Ready for Re-test: YES`), the skill automatically activates **regression mode**. Instead of re-testing the entire feature blast radius, it generates only 2 targeted suites: **Fix Verification** (re-run the exact failing scenarios) and **Impact Zone** (test direct dependencies of modified files). Previously validated areas unaffected by the fix are excluded, reducing token usage. If the fix's blast radius exceeds 60% of the feature map, the skill falls back to full-scope testing. Note: for small regression scopes (<=2 suites), the swarm Docker isolation overhead may exceed the benefit — the plan will note this.
+
 ### Phase 5 Detail — Per-Agent Lifecycle
 
 Each agent follows this sequence:

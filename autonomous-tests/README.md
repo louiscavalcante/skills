@@ -292,6 +292,17 @@ Use `guided` to test existing features or workflows without needing code changes
 /autonomous-tests guided file:docs/_autonomous/pending-guided-tests/checkout-flow.md rescan
 ```
 
+### Targeted Regression Mode
+
+When re-running after `autonomous-fixes` has applied fixes (fix-results with `Ready for Re-test: YES`), the skill automatically activates **regression mode**. Instead of re-testing the entire feature blast radius, it:
+
+1. Reads the fix manifest (files modified, what was done, original test IDs)
+2. Computes a 1-hop impact zone (direct callers/callees of modified files only)
+3. Cross-references prior test results to identify what already passed
+4. Generates only 2 targeted suites: **Fix Verification** (re-run the exact failing scenarios) and **Impact Zone** (test direct dependencies for side-effects)
+
+Previously validated areas unaffected by the fix are excluded, significantly reducing token usage on re-test runs. If the fix's blast radius exceeds 60% of the feature map (e.g., a core utility was changed), the skill falls back to full-scope testing automatically.
+
 ### Test History
 
 The skill scans your `_autonomous/` output folders for previous test results related to the current changes. It matches filenames (which contain feature names) against the current feature map, then reads only Summary and Issues Found sections from matching docs.
