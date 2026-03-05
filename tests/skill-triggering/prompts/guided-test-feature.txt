@@ -1,1 +1,0 @@
-I want to test the payment checkout flow end-to-end but I don't have any code changes. Can you trace through the codebase and run tests on it?

@@ -1,1 +1,0 @@
-Test the changes I made to the payment endpoint. I have Docker running.

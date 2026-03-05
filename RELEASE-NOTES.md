@@ -1,5 +1,19 @@
 # Release Notes
 
+## v1.10.0 (2026-03-04)
+
+### Changed
+- **Orchestrator Protocol** (all three skills): Added explicit section defining orchestrator boundaries — MUST delegate operational work (bash commands, source reading, file generation, test/fix execution) to agents. MAY only coordinate, gate, and interact with user.
+- **Phase restructuring** (all three skills): Consolidated from 9-10 phases to 7 (phases 0-6). Merged Safety + Service Startup → Safety & Environment. Merged Fix Cycle + Documentation + Cleanup → Results & Docs. Context Reset → Finalize. Each phase now has a single clear objective.
+- **Mandatory setup agent** (autonomous-tests + autonomous-fixes): Setup agent is now required for ALL suite/item counts. Removed "for 1-2 items, orchestrator may prepare context directly" exception.
+- **Strictly sequential execution** (autonomous-fixes): Removed parallel group logic and dependency analysis. Execution is always sequential — one agent at a time, same pattern as autonomous-tests.
+- **Removed `credentialType` handling** (autonomous-fixes): Since execution is always sequential, token-based vs session-based credential classification is unnecessary. Removed prompt and associated logic.
+- **Config version alignment** (autonomous-fixes): Updated config version check from 4 to 5, aligning with autonomous-tests schema.
+- **Operational delegation** (all three skills): Capabilities scan, CLAUDE.md deep scan, findings scan, document parsing, safety checks, service startup, port scanning, doc generation, and cleanup all delegated to agents instead of orchestrator executing directly.
+- **Hash computation deduplication** (all three skills): SHA-256 config hash defined once as "Config hash method" in Phase 0, referenced by label throughout instead of repeated verbatim (~7 occurrences eliminated per skill).
+- **Rules consolidation** (all three skills): Converted verbose prose rules to compact tables. Removed rules that restated phase instructions. Deduplicated overlapping constraints.
+- **Templates deduplication**: Removed fix-results template from `autonomous-tests/references/templates.md` — canonical copy in `autonomous-fixes/references/templates.md`.
+
 ## v1.9.0 (2026-03-04)
 
 ### Changed

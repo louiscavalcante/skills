@@ -1,1 +1,0 @@
-I have changes I'd like to test end-to-end. Can you run automated tests against my local stack?

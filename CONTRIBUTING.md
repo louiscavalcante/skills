@@ -27,9 +27,8 @@ Every skill must include:
 
 1. Create a feature branch: `git checkout -b feat/your-change`
 2. Make your changes following existing patterns
-3. Add or update trigger tests in `tests/skill-triggering/`
-4. Update `RELEASE-NOTES.md` with your changes
-5. Submit a pull request with a clear description
+3. Update `RELEASE-NOTES.md` with your changes
+4. Submit a pull request with a clear description
 
 ## Commit Conventions
 

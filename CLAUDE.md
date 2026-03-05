@@ -24,49 +24,40 @@ skills/
 │   ├── SKILL.md           ← Claude-facing skill definition
 │   ├── references/        ← Finding parser, templates
 │   └── scripts/           ← Setup scripts
-├── hooks/                 ← Discoverable hook configurations
-│   └── hooks.json
-└── tests/                 ← Skill-triggering tests
-    └── skill-triggering/
+└── hooks/                 ← Discoverable hook configurations
+    └── hooks.json
 ```
 
 ## Development Workflow
 
 ### Modifying a skill
+
 1. Edit `<skill>/SKILL.md` for behavior changes
 2. Edit `<skill>/README.md` for user-facing docs
 3. Update `<skill>/references/` for schema or template changes
 4. Update `RELEASE-NOTES.md` with changes under a new version heading
 
 ### Adding a new skill
+
 1. Create a new directory: `<skill-name>/`
 2. Add required files: `SKILL.md`, `README.md`
 3. Add optional dirs: `references/`, `scripts/`
 4. Update root `README.md` skills table
-5. Add trigger tests in `tests/skill-triggering/`
 
 ## Versioning
 
 This project uses [Semantic Versioning](https://semver.org/):
+
 - **PATCH** (1.0.x): Bug fixes, doc improvements, minor tweaks
 - **MINOR** (1.x.0): New features, new skills, backward-compatible changes
 - **MAJOR** (x.0.0): Breaking changes to skill interfaces or config schema
 
 When releasing:
+
 1. Update `RELEASE-NOTES.md` with the new version and changes
 2. Commit with message: `Release vX.Y.Z`
 3. Tag: `git tag -a vX.Y.Z -m "vX.Y.Z — <summary>"`
 4. Push: `git push origin main --tags`
-
-## Testing
-
-Run skill-triggering tests (requires Claude Code CLI):
-
-```bash
-bash tests/skill-triggering/run-all.sh
-```
-
-These tests verify that natural language prompts correctly trigger the intended skill.
 
 ## Rules
 
@@ -75,3 +66,56 @@ These tests verify that natural language prompts correctly trigger the intended 
 - Follow existing patterns when adding skills
 - Always update RELEASE-NOTES.md when making changes
 - Test trigger prompts before submitting new skills
+
+---
+
+### Architecture and Agent Responsibilities
+
+- The **main agent** acts strictly as the **Orchestrator**.
+- The Orchestrator must never execute operational work.
+- Every phase of a skill must be executed by spawning an `Agent()`.
+- All spawned agents must report their findings or results back to the Orchestrator.
+- The Orchestrator is responsible only for synthesizing reports and generating the plan.
+
+### Exploration Phase Rules
+
+When a skill needs to explore information within its scope:
+
+- It must spawn one or more `Explore()` agents.
+- Each `Explore()` agent gathers findings and reports back to the Orchestrator.
+- The Orchestrator consolidates findings and creates the plan.
+- No exploration work should be done directly by the Orchestrator.
+
+### Plan Mode and Context Reset
+
+When the plan is accepted:
+
+- The system context is cleared.
+- The Orchestrator retains only what is explicitly written inside the plan.
+- Therefore, all relevant discoveries, assumptions, constraints, and prior findings must be embedded at the beginning of the plan.
+- The plan must contain sufficient context to prevent duplicated exploration or repeated actions after reset.
+
+### Task Execution via Agent Team
+
+Once in plan execution mode:
+
+- Tasks must be executed using the **Agent Team** feature (Claude Code).
+- Each skill integrates with Agent Team differently—respect those differences.
+
+Agent spawning rules per skill:
+
+- **autonomous-tests** → Must execute tasks sequentially. Spawn one agent at a time. Wait for completion before spawning the next.
+- **autonomous-fixes** → Must execute tasks sequentially. Spawn one agent at a time. Wait for completion before spawning the next.
+- **autonomous-tests-swarm** → May spawn multiple Agent Team agents in parallel.
+
+Only **autonomous-tests-swarm** is allowed to run multiple concurrent agents. The other two skills must always operate one-by-one.
+
+### Additional Constraints
+
+- Maintain functional parity with the original skills.
+- Remove duplicated phases or overlapping responsibilities.
+- Ensure each phase has a single clear objective.
+- Keep wording concise and execution-oriented.
+- Ensure reporting hierarchy is always: Agent → Orchestrator → Plan.
+
+The final skills should be structurally clean, operationally strict, and optimized for deterministic, efficient execution.

@@ -1,1 +1,0 @@
-I have some pending bugs from my last test run. Can you fix them automatically?
