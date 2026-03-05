@@ -1,5 +1,16 @@
 # Release Notes
 
+## v1.14.0 (2026-03-05)
+
+### Added
+- **Cross-project seed map** (autonomous-tests + swarm Phase 2): Explore agent now traces which collections/tables in related project databases are read by the main project's E2E flows (shared users, linked entities, cross-service references). Per dependency: related project name, collection/table, required fields, relationship to main project data, connection command.
+- **Seed schema discovery for related projects** (autonomous-tests + swarm Phase 4): The seed schema discovery protocol now explicitly covers all databases in the E2E flow, including related projects. New step (5): use connection command from `relatedProjects[]` config or the cross-project seed map in the Feature Context Document. Verification changed from "before user interaction" to "before proceeding" to cover both autonomous and guided modes.
+- **Seed schema discovery rule** (autonomous-tests-swarm): New rule row in the Rules table — previously only existed in autonomous-tests.
+
+### Changed
+- **Feature Context Document** (both testing skills): Now includes cross-project seed map (related project DB dependencies with collection/table, required fields, connection commands) — cascaded to all Phase 4 agents.
+- **Seed schema discovery rule wording** (autonomous-tests): Updated from "Before seeding" to "Before seeding any DB (main or related project)" for clarity.
+
 ## v1.13.0 (2026-03-05)
 
 ### Added

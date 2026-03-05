@@ -197,6 +197,7 @@ Spawn ONE Explore agent (`subagent_type: "Explore"`, no `team_name`).
    - **Dependency graph**: callers → changed code → callees, across files and projects
    - **Smart doc analysis**: (a) match paths/features/endpoints against `docs/` tree, (b) `_autonomous/` scan — Summary + Issues Found only, extract prior failures/bugs, (c) fix completion scan — `Status: RESOLVED` + `Verification: PASS` → regression targets, `Ready for Re-test: YES` → priority re-test
    - **Edge case inventory**: error handlers, validation branches, race conditions, retry logic
+   - **Cross-project seed map**: For each `relatedProjects[]`, trace which collections/tables in the related project's database are read by the main project's E2E flows (shared users, linked entities, cross-service references). Per dependency: related project name, collection/table, required fields, relationship to main project data, connection command from `relatedProjects[].database.connectionCommand` or inferred from config.
 4. Receive agent report
 
 ### Guided mode (user augmentation — single agent)
@@ -232,7 +233,7 @@ Compile **Targeted Regression Context Document** (replaces Feature Context Docum
 
 ### Feature Context Document (standard/guided modes — skipped in regression mode)
 
-Compile from agent report (do NOT re-read analyzed files). Contains: features, endpoints, DB tables/collections, external services, edge cases, prior history, capabilities. Guided mode adds `Mode:` and `Source:` at top. Cascaded to all agents in Phase 4.
+Compile from agent report (do NOT re-read analyzed files). Contains: features, endpoints, DB tables/collections, cross-project seed map (related project DB dependencies with collection/table, required fields, connection commands), external services, edge cases, prior history, capabilities. Guided mode adds `Mode:` and `Source:` at top. Cascaded to all agents in Phase 4.
 
 ## Phase 3 — Plan (Plan Mode)
 
@@ -350,7 +351,7 @@ Orchestrator waits for setup completion, then spawns suite agents with pre-gener
 - **e. npm-dev setup**: `rsync` project (exclude node_modules/.next/dist/.turbo), set up node_modules, resolve env overrides (`{port}`/`{backendPort}`), start in background (capture PID), remap env files
 - **f. Health check**: poll remapped ports, 60s timeout, 2 attempts → report failure for redistribution
 - **g. Init**: run `swarm.initialization.commands` with namespace resolution. Wait `waitAfterStartSeconds`. Related project init.
-- **h. DB seeding**: adapted `migrationCommand`, `seedCommand`, `connectionCommand`, `cleanupCommand` with `swarm-{N}` namespace
+- **h. DB seeding**: adapted `migrationCommand`, `seedCommand`, `connectionCommand`, `cleanupCommand` with `swarm-{N}` namespace. **Seed schema discovery** (mandatory for autonomous seeding — applies to ALL databases in the E2E flow, including related projects): Before inserting into ANY collection/table: (1) query for a real document/row (`findOne`/`SELECT * LIMIT 1` without test prefix filter) to use as schema template, (2) if empty, read the backend service code that creates documents in that collection (look for `insertOne`/`find_one_and_update`/`INSERT`/ORM create calls), (3) mirror the discovered schema exactly — never invent fields or change types (ObjectId vs string, Date vs string, etc.), (4) only add `_testPrefix` marker as extra field, (5) for related project collections: use the connection command from `relatedProjects[]` config or the cross-project seed map in the Feature Context Document. After all seeds (main + related): hit the API read endpoints (via the agent's remapped ports) to verify serialization before proceeding to test execution.
 - **i. Execute**: test suites against agent's API (remapped ports)
 - **j. Report**: PASS/FAIL + anomalies via `SendMessage`
 - **k. Audit** (when enabled): `agent-{N}.json` → `schemaVersion: "1.0"`, agentId, suites, environment, timeline (`{ timestamp, action, target, result }`), configuredLimits (no `docker stats`), teardown status, duration
@@ -431,6 +432,7 @@ When `swarm.audit.enabled`: append "Execution Audit" section (agent count, durat
 | Tool loading gate | Browser tools need pre-plan approval in autonomous mode, never in guided |
 | Plan self-containment | All context embedded in plan for post-reset survival — no "see above" references |
 | Guided = single agent | Override parallel protocol — one agent at a time in guided mode |
+| Seed schema discovery | Before seeding any DB (main or related project): query real doc or read service code for schema. Mirror exactly — never invent fields or change types. Verify via API after seeding |
 
 ## Operational Bounds
 

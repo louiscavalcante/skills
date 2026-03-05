@@ -171,6 +171,7 @@ Fully autonomous — derive from code diff, codebase, or guided source. Never as
    - **Dependency graph**: callers → changed code → callees, cross-file/project imports
    - **Smart doc analysis**: (a) match paths/features/endpoints against `docs/` (read relevant only), (b) `_autonomous/` scan (Summary + Issues Found only, extract prior failures/bugs), (c) fix completion scan (`RESOLVED`+`PASS` → regression targets, `Ready for Re-test: YES` → priority)
    - **Edge case inventory**: error handlers, validation branches, race conditions, retry logic
+   - **Cross-project seed map**: For each `relatedProjects[]`, trace which collections/tables in the related project's database are read by the main project's E2E flows (shared users, linked entities, cross-service references). Per dependency: related project name, collection/table, required fields, relationship to main project data, connection command from `relatedProjects[].database.connectionCommand` or inferred from config.
 4. Receive structured report.
 
 ### Guided mode (user augmentation)
@@ -203,7 +204,7 @@ Compile **Targeted Regression Context Document** (replaces Feature Context Docum
 - Environment/capabilities (same as Feature Context Document)
 
 ### Feature Context Document (standard/guided modes — skipped in regression mode)
-Compile from Explore report (do NOT re-read files). Contents: features, endpoints, DB collections/tables, external services, edge cases, test history, file reference content, capabilities. Guided mode adds `Mode` + `Source` at top. Cascaded to every Phase 4 agent.
+Compile from Explore report (do NOT re-read files). Contents: features, endpoints, DB collections/tables, cross-project seed map (related project DB dependencies with collection/table, required fields, connection commands), external services, edge cases, test history, file reference content, capabilities. Guided mode adds `Mode` + `Source` at top. Cascaded to every Phase 4 agent.
 
 ## Phase 3 — Plan (Plan Mode)
 
@@ -325,6 +326,7 @@ Verify against source: read model/serializer/DTO to confirm field exists in real
 **Execution flow**:
 1. `TaskCreate` per suite — include: env details, steps, verification queries, teardown, Feature Context Document, credential **role name**, browser tools/status, Service Readiness Report (use directly, no re-check), DB lifecycle:
    - Pre-test: `migrationCommand` → seed (`autonomous`: create with `testDataPrefix`; `command`: run `seedCommand`)
+   - **Seed schema discovery** (mandatory for autonomous seeding — applies to ALL databases in the E2E flow, including related projects): Before inserting into ANY collection/table: (1) query for a real document/row (`findOne`/`SELECT * LIMIT 1` without test prefix filter) to use as schema template, (2) if empty, read the backend service code that creates documents in that collection (look for `insertOne`/`find_one_and_update`/`INSERT`/ORM create calls), (3) mirror the discovered schema exactly — never invent fields or change types (ObjectId vs string, Date vs string, etc.), (4) only add `_testPrefix` marker as extra field, (5) for related project collections: use the connection command from `relatedProjects[]` config or the cross-project seed map in the Feature Context Document. After all seeds (main + related): hit the API read endpoints to verify serialization before proceeding.
    - Verification: `connectionCommand` for queries
    - Post-test: `cleanupCommand` or clean `testDataPrefix` data. Order: migrate → seed → test → cleanup.
    - Browser: include workflow + priority chain. "Do NOT skip browser suites."
@@ -378,6 +380,7 @@ Verify against source: read model/serializer/DTO to confirm field exists in real
 | No dynamic commands | Only execute verbatim config commands — no generation/concatenation/interpolation |
 | Finding verification | Verify against source code before reporting any finding |
 | Idempotent test data | Prefix with `testDataPrefix`. Skip or reset if exists |
+| Seed schema discovery | Before seeding any DB (main or related project): query real doc or read service code for schema. Mirror exactly — never invent fields or change types. Verify via API after seeding |
 | External API care | Delays between calls, sandbox modes, minimize requests |
 | `_autonomous/` reading | Summary + Issues Found sections only |
 | Capabilities auto-detected | Never ask user to configure manually |
