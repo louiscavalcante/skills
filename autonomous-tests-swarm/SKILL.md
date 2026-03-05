@@ -211,6 +211,25 @@ Compile from agent report (do NOT re-read analyzed files). Contains: features, e
 
 **Step 0 — Context Reload**: re-read SKILL.md, config, templates (`autonomous-tests/references/templates.md`). Restore: resolved `$ARGUMENTS`, branch, commit range, Phase 2 findings, `userContext`, swarm config, port assignments, init commands, related project map. If guided: type + source.
 
+- Execution Protocol (embed verbatim — orchestrator uses this after context reset):
+  ```
+  TEAM: TeamCreate → general-purpose team (team_name for all agents)
+  MODEL: Always model: "opus"
+  SETUP AGENT: Spawn first (general-purpose, opus, team_name). Creates agent dirs, generates modified compose/docker scripts with remapped ports, copies+remaps env files, validates configs, freezes capabilities snapshot, applies resource limits + Docker labels, reads source files, reports via SendMessage. Shut down before suite agents.
+  FLOW: PARALLEL — multiple suite agents simultaneously:
+    1. Set Docker context
+    2. Confirm port ranges
+    3. TaskCreate per suite (agent spec: project name swarm-{N}, ports, Docker context, compose path, frozen capabilities, Feature Context Document)
+    4. Spawn agents with team_name, assign via TaskUpdate
+    5. All agents execute in parallel
+  FAILURE: redistribute failed agent's suites to healthy agents. Failed agent tears down immediately.
+  POST-COMPLETION:
+    - Docker cleanup: filter by name (swarm-) + labels (com.autonomous-swarm.session={sessionId})
+    - Merge audit logs → audit-summary.json
+    - rm -rf /tmp/autonomous-swarm-{sessionId}
+  SHUTDOWN: SendMessage type: "shutdown_request" to all teammates
+  ```
+
 **Categories** — standard/doc-based: all 9; description-based: 1 + 7 only (anomaly detection, finding verification, API security inspection still apply):
 
 1. **Happy path** — normal flows end-to-end

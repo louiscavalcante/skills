@@ -110,6 +110,23 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
 
 **Step 0 — Context Reload** (for post-approval reconstruction): Re-read SKILL.md, config, templates. Record: resolved arguments (`$ARGUMENTS`), branch, selected items (IDs, titles, sources), key finding context, user notes.
 
+- Execution Protocol (embed verbatim — orchestrator uses this after context reset):
+  ```
+  TEAM: TeamCreate → fix team (team_name for all agents)
+  MODEL: Always model: "opus"
+  SETUP AGENT: Spawn first (general-purpose, opus, team_name). Reads source files referenced by findings, compiles Fix Context Documents, reads CLAUDE.md files, reports via SendMessage. Shut down before fix agents.
+  FLOW: STRICTLY SEQUENTIAL — one fix agent at a time:
+    1. For each selected item (in order):
+       a. Spawn ONE agent (general-purpose, opus, team_name)
+       b. TaskUpdate with: Fix Context Document, source paths, fix instructions, verification steps
+       c. BLOCK — wait for completion
+       d. SendMessage type: "shutdown_request"
+       e. Wait for shutdown confirmation
+       f. Next item
+  PROHIBITED: multiple agents alive, spawning N+1 before N shutdown, parallel execution, main-conversation fixes
+  SHUTDOWN: SendMessage shutdown_request to all teammates after completion
+  ```
+
 **Setup agent** (MANDATORY): Spawn setup agent (`general-purpose`, `model: "opus"`, `team_name`) to read all source files referenced by findings, compile Fix Context Documents, read discovered CLAUDE.md files for architecture context, report via `SendMessage`. Shut down after reporting.
 
 **Fix Context Document per item**:

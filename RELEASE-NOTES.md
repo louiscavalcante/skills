@@ -1,5 +1,10 @@
 # Release Notes
 
+## v1.10.1 (2026-03-04)
+
+### Fixed
+- **Execution Protocol in plans** (all three skills): Plans now embed a verbatim Execution Protocol block in Step 0 Context Reload. After context reset on plan approval, the orchestrator retains the full agent team workflow (TeamCreate, spawning pattern, sequential/parallel flow, shutdown) without needing to re-read SKILL.md. Fixes orchestrator skipping Agent Team creation post-reset.
+
 ## v1.10.0 (2026-03-04)
 
 ### Changed

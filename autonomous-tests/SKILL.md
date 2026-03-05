@@ -187,6 +187,26 @@ Compile from Explore report (do NOT re-read files). Contents: features, endpoint
 - User context: flaky areas, priorities, notes
 - Service Readiness Report from Phase 1 (agents use directly, MUST NOT start services or re-check health)
 - If guided: type and source
+- Execution Protocol (embed verbatim — orchestrator uses this after context reset):
+  ```
+  TEAM: TeamCreate → general-purpose team (team_name for all agents)
+  MODEL: Always model: "opus"
+  SETUP AGENT: Spawn first (general-purpose, opus, team_name). Reads source files, compiles Feature Context Document, reports via SendMessage. Shut down before suite agents.
+  FLOW: STRICTLY SEQUENTIAL — one suite agent at a time:
+    1. TaskCreate per suite (env, steps, verification, teardown, Feature Context Document, credential role name, Service Readiness Report, DB lifecycle, browser priority chain)
+    2. TaskUpdate with owner
+    3. For each suite (in order):
+       a. Spawn ONE agent (general-purpose, opus, team_name)
+       b. Assign via TaskUpdate
+       c. BLOCK — wait for completion
+       d. SendMessage type: "shutdown_request"
+       e. Wait for shutdown confirmation
+       f. Report PASS/FAIL
+       g. Next suite
+  PROHIBITED: multiple agents alive, spawning N+1 before N shutdown, parallel execution, main-conversation execution
+  SHUTDOWN: SendMessage shutdown_request to all teammates after completion
+  AUDIT: agents spawned count, suites executed, cleanup status
+  ```
 
 **Test categories** — standard/doc-based: all 9. Description-based: 1 + 7 only (API inspection, finding verification, anomaly detection still apply).
 
