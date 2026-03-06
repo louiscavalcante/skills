@@ -213,7 +213,7 @@ Compile from Explore report (do NOT re-read files). Contents: features, endpoint
 - Scope: `$ARGUMENTS`, branch, commit range
 - Findings: Phase 2 discoveries (modules, endpoints, dependencies, test flow classifications, related project log commands)
 - User context: flaky areas, priorities, notes
-- Service Readiness Report from Phase 1 (agents use directly, MUST NOT start services or re-check health)
+- Service Readiness Report from Phase 1 (Phase 3 agents MUST NOT start services or re-check health — service restoration occurs at Phase 4 start)
 - If regression mode: fix manifest, 1-hop impact zone, original test IDs, Targeted Regression Context Document
 - If guided: type, source, and full guided test list with per-test seed requirements
 
@@ -222,14 +222,16 @@ Compile from Explore report (do NOT re-read files). Contents: features, endpoint
 **Self-containment mandate** — the plan MUST embed directly (not reference "above" or prior phases):
 1. All test suites with full details (name, objective, pre-conditions, steps, expected outcomes, teardown, verification)
 2. Feature Context Document (condensed but complete)
-3. Service Readiness Report from Phase 1
+3. Service Readiness Report from Phase 1 (used by Phase 4 service restoration agent to re-verify/restart services after context reset)
 4. Per-suite agent spawn instructions with resolved values (env, steps, verification, credential role name, DB lifecycle, browser priority chain)
 5. Config paths: `documentation.*`, `database.connectionCommand`, `testing.unitTestCommand`, `testDataPrefix`
 6. Credential role names from `testCredentials`
 7. If guided: per-test DB seed commands, user-facing step-by-step instructions, and verification queries
+8. Seed schema discovery mandate (embedded verbatim for Phase 4 agents)
 
 - Execution Protocol — autonomous mode (embed verbatim — orchestrator uses this after context reset):
   ```
+  SERVICE RESTORATION: Spawn general-purpose subagent (foreground). Re-verify all services from Service Readiness Report using healthCheck from config. Unhealthy → restart via startCommand + poll 5s/30s. Start webhook listeners. STOP if any service unreachable. Returns updated Service Readiness Report.
   SETUP: Spawn general-purpose subagent (foreground). Reads source files, compiles Feature Context Document, returns results.
   FLOW: STRICTLY SEQUENTIAL — one subagent at a time:
     1. For each suite (in order):
@@ -248,6 +250,7 @@ Compile from Explore report (do NOT re-read files). Contents: features, endpoint
   MODE: User augmentation
   NO BROWSER AUTOMATION: agent-browser and Playwright MUST NOT be loaded
   CATEGORIES: Happy-path workflows ONLY
+  SERVICE RESTORATION: Spawn general-purpose subagent (foreground). Re-verify all services from Service Readiness Report using healthCheck from config. Unhealthy → restart via startCommand + poll 5s/30s. Start webhook listeners. STOP if any service unreachable. Returns updated Service Readiness Report.
   FLOW: For each guided test (in order):
     1. Spawn ONE general-purpose subagent (foreground) for DB seeding + external service setup
     2. Subagent seeds database, configures services, returns readiness status
@@ -285,7 +288,15 @@ Each suite: name, objective, pre-conditions, steps + expected outcomes, teardown
 
 Spawn `general-purpose` subagents sequentially (foreground). Each subagent receives full context in its prompt and returns results directly.
 
-**Setup agent** (mandatory): spawn first (general-purpose subagent, foreground) to read source files, compile Feature Context Document, return results. Proceeds after completion.
+**Service restoration agent** (mandatory, runs FIRST): Spawn one general-purpose subagent (foreground) before any other Phase 4 work. Context reset kills background processes from Phase 1 — services must be re-established. For each service in the embedded Service Readiness Report and config:
+1. Run `healthCheck` — if healthy → `verified-post-reset`
+2. If unhealthy → run `startCommand` → poll health check 5s/30s → `restarted-post-reset` or `failed-post-reset`
+3. Related projects: same check using `relatedProjects[]` healthCheck/startCommand
+4. Start webhook listeners from `externalServices[].webhookListener`
+5. **Gate**: any `failed-post-reset` → **STOP**, report to user
+6. Return updated Service Readiness Report — all subsequent agents use this
+
+**Setup agent** (mandatory): spawn after service restoration (general-purpose subagent, foreground) to read source files, compile Feature Context Document, return results. Proceeds after completion.
 
 **Credential assignment**: Rotate role names from `testCredentials` across suites. Task descriptions include only the **role name** — never values or env var refs. Agents resolve at runtime.
 
@@ -315,8 +326,9 @@ Spawn `general-purpose` subagents sequentially (foreground). Each subagent recei
 Verify against source: read model/serializer/DTO to confirm field exists in real schema — not test data. False positives MUST NOT be reported. Each finding: Severity, Regulatory impact, Exploitability, Compliance risk → `### API Response Security` subsection.
 
 **Execution flow**:
-1. For each suite, prepare prompt including: env details, steps, verification queries, teardown, Feature Context Document, credential **role name**, browser tools/status, Service Readiness Report (use directly, no re-check), related project log commands, test flow type, DB lifecycle:
+1. For each suite, prepare prompt including: env details, steps, verification queries, teardown, Feature Context Document, credential **role name**, browser tools/status, Service Readiness Report (updated by service restoration agent), related project log commands, test flow type, DB lifecycle:
    - Pre-test: `migrationCommand` → seed (`autonomous`: create with `testDataPrefix`; `command`: run `seedCommand`)
+   - **Seed schema analysis gate** (MANDATORY — before ANY database write): The plan MUST embed the seed schema discovery protocol. Agents must complete schema analysis and report discovered schemas BEFORE executing any insert/seed operation. Proceeding without schema analysis is PROHIBITED.
    - **Seed schema discovery** (mandatory for autonomous seeding — applies to ALL databases in the E2E flow, including related projects): Before inserting into ANY collection/table: (1) query for a real document/row (`findOne`/`SELECT * LIMIT 1` without test prefix filter) to use as schema template, (2) if empty, read the backend service code that creates documents in that collection (look for `insertOne`/`find_one_and_update`/`INSERT`/ORM create calls), (3) mirror the discovered schema exactly — never invent fields or change types (ObjectId vs string, Date vs string, etc.), (4) only add `_testPrefix` marker as extra field, (5) for related project collections: use the connection command from `relatedProjects[]` config or the cross-project seed map in the Feature Context Document. After all seeds (main + related): hit the API read endpoints to verify serialization before proceeding.
    - Verification: `connectionCommand` for queries
    - Post-test: `cleanupCommand` or clean `testDataPrefix` data. Order: migrate → seed → test → cleanup.
@@ -340,7 +352,7 @@ Verify against source: read model/serializer/DTO to confirm field exists in real
 
 **Objective**: Process results, generate documentation, clean up test data.
 
-**Fix cycle**: Runtime-fixable (env/container/stuck job) → spawn general-purpose subagent (foreground) to fix → re-run suite → max 3 cycles. Code bug → document (file, line, expected vs actual) → ask user.
+**Fix cycle**: Runtime-fixable (env/container/stuck job) → before attempting any fix, verify the issue is real: re-read error output, check if the failure is transient (retry once), confirm root cause in logs/config. Only proceed with a fix after confirming the issue genuinely requires intervention. Spawn general-purpose subagent (foreground) to fix → re-run suite → max 3 cycles. Code bug → document (file, line, expected vs actual) → ask user.
 
 **Documentation**: Spawn general-purpose subagent (foreground). Timestamp via `date -u +"%Y-%m-%d-%H-%M-%S"`. Pattern: `{timestamp}_{semantic-name}.md`. Read `references/templates.md` first. Four doc types: test-results (always), pending-fixes (bugs/infra issues), pending-guided-tests (browser/visual/physical — include `guided/mobile` tests with physical device steps and verification commands), pending-autonomous-tests (identified but not run). Re-runs → append "Re-run" section.
 
@@ -382,7 +394,7 @@ Verify against source: read model/serializer/DTO to confirm field exists in real
 
 | Bound | Constraint |
 |---|---|
-| Max agents | Approved test suites + one setup agent |
+| Max agents | Approved test suites + one service restoration agent + one setup agent |
 | Max fix cycles | 3 per suite |
 | Health check timeout | 30s per service |
 | Capability cache | `rescanThresholdDays` (default 7 days) |

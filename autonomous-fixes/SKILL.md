@@ -148,7 +148,7 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
 **Setup agent** (MANDATORY): Spawn setup subagent (general-purpose, foreground) to read all source files referenced by findings, compile Fix Context Documents, read discovered CLAUDE.md files for architecture context, return results. **Orchestrator MUST embed the setup agent's Fix Context Documents into the plan text** — condensed but complete.
 
 **Fix Context Document per item**:
-1. Verify finding reproduces — if code changed and issue gone → `Status: ALREADY_RESOLVED`, skip
+1. **Verify finding is real and still reproduces** (MANDATORY gate — do NOT skip): Re-read the source code at the reported location. Check if the code has changed since the finding was reported. Run the failing scenario or check the vulnerable path. If code changed and issue gone → `Status: ALREADY_RESOLVED`, skip. If the finding was based on a misunderstanding of the code logic → `Status: FALSE_POSITIVE`, skip. Only proceed to fix design after confirming the issue genuinely exists and requires intervention.
 2. Read referenced files (endpoint, model, test) — record file paths
 3. Trace code path: input → processing → output — summarize path
 4. Identify root cause — state explicitly
@@ -172,10 +172,12 @@ Spawn general-purpose subagents sequentially (foreground). For each selected ite
 5. Next item
 
 **Standard fix agent instructions**:
-1. Read Fix Context Document → re-read source → implement fix (root cause)
-2. Run unit tests if configured (`testing.unitTestCommand`)
-3. Verify with targeted checks (API calls, DB queries, log inspection)
-4. Report: RESOLVED / PARTIAL / UNABLE with details
+1. Read Fix Context Document → re-read source at reported location
+2. **Double-check**: Verify the issue still exists in the current code before writing any fix. If the code has changed or the issue no longer reproduces → report `ALREADY_RESOLVED` without modifying files
+3. Implement fix targeting root cause
+4. Run unit tests if configured (`testing.unitTestCommand`)
+5. Verify with targeted checks (API calls, DB queries, log inspection)
+6. Report: RESOLVED / PARTIAL / UNABLE with details
 5. Record `Original Test IDs` from source finding's `Test ID` field into fix-results documentation
 
 **V-prefix additional instructions**:

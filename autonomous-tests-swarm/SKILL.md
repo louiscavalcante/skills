@@ -249,10 +249,12 @@ Compile from agent report (do NOT re-read analyzed files). Contains: features, e
 5. Config paths: `documentation.*`, `database.connectionCommand`, `testing.unitTestCommand`, `testDataPrefix`
 6. Swarm config: port assignments, init commands, related project map
 7. If guided: per-test DB seed commands, user-facing step-by-step instructions, and verification queries
+8. Seed schema discovery mandate (embedded verbatim for Phase 4 suite agents)
 
 - Execution Protocol — autonomous mode (embed verbatim — orchestrator uses this after context reset):
   ```
   SETUP: Spawn general-purpose subagent (foreground). Creates agent dirs, generates modified compose/docker scripts with remapped ports, copies+remaps env files, validates configs, freezes capabilities snapshot, applies resource limits + Docker labels, reads source files, returns specs.
+  SCHEMA GATE: Every suite agent MUST complete seed schema discovery (query real doc or read service code) BEFORE any database write. Proceeding without schema analysis is PROHIBITED.
   FLOW: PARALLEL — background subagents:
     1. Set Docker context
     2. Confirm port ranges
@@ -342,7 +344,7 @@ Orchestrator receives setup results, then spawns suite subagents with pre-genera
 - **e. npm-dev setup**: `rsync` project (exclude node_modules/.next/dist/.turbo), set up node_modules, resolve env overrides (`{port}`/`{backendPort}`), start in background (capture PID), remap env files
 - **f. Health check**: poll remapped ports, 60s timeout, 2 attempts → report failure for redistribution
 - **g. Init**: run `swarm.initialization.commands` with namespace resolution. Wait `waitAfterStartSeconds`. Related project init.
-- **h. DB seeding**: adapted `migrationCommand`, `seedCommand`, `connectionCommand`, `cleanupCommand` with `swarm-{N}` namespace. **Seed schema discovery** (mandatory for autonomous seeding — applies to ALL databases in the E2E flow, including related projects): Before inserting into ANY collection/table: (1) query for a real document/row (`findOne`/`SELECT * LIMIT 1` without test prefix filter) to use as schema template, (2) if empty, read the backend service code that creates documents in that collection (look for `insertOne`/`find_one_and_update`/`INSERT`/ORM create calls), (3) mirror the discovered schema exactly — never invent fields or change types (ObjectId vs string, Date vs string, etc.), (4) only add `_testPrefix` marker as extra field, (5) for related project collections: use the connection command from `relatedProjects[]` config or the cross-project seed map in the Feature Context Document. After all seeds (main + related): hit the API read endpoints (via the agent's remapped ports) to verify serialization before proceeding to test execution.
+- **h. DB seeding**: adapted `migrationCommand`, `seedCommand`, `connectionCommand`, `cleanupCommand` with `swarm-{N}` namespace. **Seed schema analysis gate** (MANDATORY — before ANY database write): Agents must complete schema analysis and report discovered schemas BEFORE executing any insert/seed operation. Proceeding without schema analysis is PROHIBITED. **Seed schema discovery** (mandatory for autonomous seeding — applies to ALL databases in the E2E flow, including related projects): Before inserting into ANY collection/table: (1) query for a real document/row (`findOne`/`SELECT * LIMIT 1` without test prefix filter) to use as schema template, (2) if empty, read the backend service code that creates documents in that collection (look for `insertOne`/`find_one_and_update`/`INSERT`/ORM create calls), (3) mirror the discovered schema exactly — never invent fields or change types (ObjectId vs string, Date vs string, etc.), (4) only add `_testPrefix` marker as extra field, (5) for related project collections: use the connection command from `relatedProjects[]` config or the cross-project seed map in the Feature Context Document. After all seeds (main + related): hit the API read endpoints (via the agent's remapped ports) to verify serialization before proceeding to test execution.
 - **i. Execute**: test suites against agent's API (remapped ports)
 - **j. Report**: PASS/FAIL + anomalies returned to orchestrator
 - **k. Audit** (when enabled): `agent-{N}.json` → `schemaVersion: "1.0"`, agentId, suites, environment, timeline (`{ timestamp, action, target, result }`), configuredLimits (no `docker stats`), teardown status, duration
@@ -366,7 +368,7 @@ Orchestrator receives setup results, then spawns suite subagents with pre-genera
 ## Phase 5 — Results & Docs
 
 ### Fix cycle
-- **Runtime-fixable** (env var, container, stuck job): fix → re-run → max 3 cycles
+- **Runtime-fixable** (env var, container, stuck job): before attempting any fix, verify the issue is real — re-read error output, check if transient (retry once), confirm root cause in logs/config. Only fix after confirming genuine issue. Fix → re-run → max 3 cycles.
 - **Code bug**: document (file, line, expected vs actual) → ask user
 
 ### Documentation

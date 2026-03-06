@@ -1,5 +1,12 @@
 # Release Notes
 
+## v2.0.1 (2026-03-06)
+
+### Fixed
+- **Service restoration after context reset** (autonomous-tests): Phase 4 now spawns a mandatory service restoration agent FIRST — re-verifies all services from the embedded Service Readiness Report, restarts unhealthy ones via `startCommand` + poll, starts webhook listeners, and gates on failures before any test execution. Fixes background processes dying when context resets on plan approval.
+- **Strengthened seed schema analysis gate** (autonomous-tests + swarm): Seed schema discovery is now a mandatory gate (PROHIBITED to proceed without completing schema analysis). Added to self-containment mandate for plan embedding, execution protocols, and Phase 4 agent instructions in both testing skills.
+- **Fix verification double-check** (all 3 skills): Runtime fix cycles (autonomous-tests + swarm) now verify issues are real before attempting fixes — re-read error output, check if transient, confirm root cause. Code fix agents (autonomous-fixes) double-check that the issue still exists in current code before writing any fix, with `FALSE_POSITIVE` status for misidentified findings.
+
 ## v2.0.0 (2026-03-06)
 
 ### Breaking Changes
