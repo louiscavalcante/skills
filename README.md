@@ -9,8 +9,8 @@ Reusable, project-agnostic skills that extend Claude Code with specialized auton
 
 | Skill | Description | Model | Install |
 |---|---|---|---|
-| [autonomous-tests](autonomous-tests/) | Autonomous E2E test runner — analyzes diffs or traces guided features, generates test plans, and executes suites sequentially via Agent Teams | Opus 4.6 | `npx skills add louiscavalcante/skills --skill autonomous-tests` |
-| [autonomous-fixes](autonomous-fixes/) | Autonomous fix runner — reads test findings, applies fixes via Agent Teams, and updates docs for re-testing (test-fix loop) | Opus 4.6 | `npx skills add louiscavalcante/skills --skill autonomous-fixes` |
+| [autonomous-tests](autonomous-tests/) | Autonomous E2E test runner — analyzes diffs or traces guided features, generates test plans, and executes suites sequentially via subagents | Opus 4.6 | `npx skills add louiscavalcante/skills --skill autonomous-tests` |
+| [autonomous-fixes](autonomous-fixes/) | Autonomous fix runner — reads test findings, applies fixes via subagents, and updates docs for re-testing (test-fix loop) | Opus 4.6 | `npx skills add louiscavalcante/skills --skill autonomous-fixes` |
 | [autonomous-tests-swarm](autonomous-tests-swarm/) | Autonomous E2E test runner with per-agent Docker isolation and guided mode — each agent spins up its own stack for true parallel testing | Opus 4.6 | `npx skills add louiscavalcante/skills --skill autonomous-tests-swarm` |
 
 ## Getting Started
@@ -34,7 +34,7 @@ See the [autonomous-tests README](autonomous-tests/README.md#manual-install) for
 
 ## What Are Skills?
 
-Skills are markdown-defined capabilities that teach Claude Code new workflows. They live in `~/.claude/skills/` and are invoked with slash commands (e.g., `/autonomous-tests`). Skills can orchestrate multi-step tasks, spawn agent teams, and produce structured output — all while keeping the human in the loop for approval.
+Skills are markdown-defined capabilities that teach Claude Code new workflows. They live in `~/.claude/skills/` and are invoked with slash commands (e.g., `/autonomous-tests`). Skills can orchestrate multi-step tasks, spawn subagents, and produce structured output — all while keeping the human in the loop for approval.
 
 ## Contributing
 

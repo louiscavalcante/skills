@@ -5,9 +5,7 @@ description: 'Fix findings from autonomous-tests. Args: all | critical | high | 
 argument-hint: 'all | critical | high | vulnerability | file:<path>'
 disable-model-invocation: true
 allowed-tools: Bash(*), Read(*), Write(*), Edit(*), Glob(*), Grep(*), Agent(*),
-  EnterPlanMode(*), ExitPlanMode(*), TaskCreate(*),
-  TaskUpdate(*), TaskList(*), TaskGet(*), TeamCreate(*),
-  SendMessage(*), TeamDelete(*), AskUserQuestion(*)
+  EnterPlanMode(*), ExitPlanMode(*), AskUserQuestion(*)
 hooks:
   PreToolUse:
     - matcher: ExitPlanMode
@@ -28,11 +26,10 @@ hooks:
 - Pending fixes: !`find docs/_autonomous/pending-fixes -name '*.md' 2>/dev/null | wc -l | tr -d ' '`
 - Fix results: !`find docs/_autonomous/fix-results -name '*.md' 2>/dev/null | wc -l | tr -d ' '`
 - Test results: !`find docs/_autonomous/test-results -name '*.md' 2>/dev/null | wc -l | tr -d ' '`
-- Agent Teams: !`python3 -c "import json;s=json.load(open('$HOME/.claude/settings.json'));print('ENABLED' if s.get('env',{}).get('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS')=='1' else 'DISABLED')" 2>/dev/null || echo "DISABLED — settings not found"`
 
 ## Role
 
-Project-agnostic autonomous fix runner. Reads findings from `autonomous-tests` output, lets the user select items to fix, plans and executes fixes via Agent Teams, verifies results, and updates documentation to enable re-testing — creating a bidirectional test-fix loop.
+Project-agnostic autonomous fix runner. Reads findings from `autonomous-tests` output, lets the user select items to fix, plans and executes fixes via subagents, verifies results, and updates documentation to enable re-testing — creating a bidirectional test-fix loop.
 
 ## Orchestrator Protocol
 
@@ -49,7 +46,7 @@ The main agent is the Orchestrator. It coordinates phases but NEVER executes ope
 - Run `date -u` for timestamps, `test -f` for file checks
 - Enter/exit plan mode
 - Use AskUserQuestion for user interaction
-- Use TeamCreate/TaskCreate/TaskUpdate/SendMessage for coordination
+- Use Agent() to spawn subagents for delegation
 - Compile summaries from agent reports
 - Make phase-gating decisions (proceed/stop/abort)
 
@@ -72,7 +69,7 @@ Print resolved scope, then proceed without waiting.
 
 ## Phase 0 — Bootstrap
 
-**Step 0 — Prerequisites**: Read `~/.claude/settings.json`. Verify `env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is `"1"` → if not, **STOP**: "Run `bash <skill-dir>/scripts/setup-hook.sh`". If `PreToolUse` hooks absent from global settings → inform (skill-scoped hooks work automatically), continue.
+**Step 0 — Prerequisites**: Read `~/.claude/settings.json`. If `PreToolUse` hooks absent from global settings → inform (skill-scoped hooks work automatically), continue.
 
 **Config hash method**: `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"`
 
@@ -124,19 +121,15 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
 
 - Execution Protocol (embed verbatim — orchestrator uses this after context reset):
   ```
-  TEAM: TeamCreate → fix team (team_name for all agents)
-  MODEL: Always model: "opus"
-  SETUP AGENT: Spawn first (general-purpose, opus, team_name). Reads source files referenced by findings, compiles Fix Context Documents, reads CLAUDE.md files, reports via SendMessage. Shut down before fix agents.
-  FLOW: STRICTLY SEQUENTIAL — one fix agent at a time:
+  SETUP: Spawn general-purpose subagent (foreground). Reads source files referenced by findings, compiles Fix Context Documents, reads CLAUDE.md files, returns results.
+  FLOW: STRICTLY SEQUENTIAL — one subagent at a time:
     1. For each selected item (in order):
-       a. Spawn ONE agent (general-purpose, opus, team_name)
-       b. TaskUpdate with: Fix Context Document, source paths, fix instructions, verification steps
-       c. BLOCK — wait for completion
-       d. SendMessage type: "shutdown_request"
-       e. Wait for shutdown confirmation
-       f. Next item
-  PROHIBITED: multiple agents alive, spawning N+1 before N shutdown, parallel execution, main-conversation fixes
-  SHUTDOWN: SendMessage shutdown_request to all teammates after completion
+       a. Spawn ONE general-purpose subagent (foreground)
+       b. Provide in prompt: Fix Context Document, source paths, fix instructions, verification steps
+       c. BLOCK — foreground = automatic blocking
+       d. Receive results directly
+       e. Next item
+  PROHIBITED: multiple concurrent subagents, parallel execution, main-conversation fixes
   ```
 
 - Post-Fix Checklist (embed verbatim in every plan):
@@ -152,7 +145,7 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
   8. [ ] 4c: `/clear` reminder printed
   ```
 
-**Setup agent** (MANDATORY): Spawn setup agent (`general-purpose`, `model: "opus"`, `team_name`) to read all source files referenced by findings, compile Fix Context Documents, read discovered CLAUDE.md files for architecture context, report via `SendMessage`. Shut down after reporting. **Orchestrator MUST embed the setup agent's Fix Context Documents into the plan text** — condensed but complete.
+**Setup agent** (MANDATORY): Spawn setup subagent (general-purpose, foreground) to read all source files referenced by findings, compile Fix Context Documents, read discovered CLAUDE.md files for architecture context, return results. **Orchestrator MUST embed the setup agent's Fix Context Documents into the plan text** — condensed but complete.
 
 **Fix Context Document per item**:
 1. Verify finding reproduces — if code changed and issue gone → `Status: ALREADY_RESOLVED`, skip
@@ -171,11 +164,11 @@ Execution is **STRICTLY SEQUENTIAL** — one agent at a time.
 
 ## Phase 3 — Execution
 
-`TeamCreate` → fix team. For each selected item (in order):
-1. Spawn ONE agent (`general-purpose`, `model: "opus"`, `team_name`)
-2. `TaskUpdate` with: Fix Context Document, source paths, fix instructions, verification steps
-3. BLOCK — wait for completion
-4. `SendMessage` → `shutdown_request`
+Spawn general-purpose subagents sequentially (foreground). For each selected item (in order):
+1. Spawn ONE general-purpose subagent (foreground)
+2. Provide in prompt: Fix Context Document, source paths, fix instructions, verification steps
+3. BLOCK — foreground = automatic blocking
+4. Receive results directly
 5. Next item
 
 **Standard fix agent instructions**:
@@ -260,8 +253,8 @@ Phase 4c is the LAST step. There is no Phase 5.
 
 - No production data/connections; no credentials in output
 - Plan mode before execution (Phase 2)
-- Delegate via TeamCreate flow — never fix in main conversation; `Agent` without `team_name` prohibited in Phase 3
-- Always `model: "opus"` for agents
+- Delegate via subagents — never fix in main conversation; all execution via Agent(subagent_type: "general-purpose")
+- Model inheritance — subagents inherit from main conversation, ensure Opus is set
 - **STRICTLY SEQUENTIAL** — one agent at a time, block until shutdown before next
 - Present findings before source reading (Phase 1 before Phase 2)
 - AskUserQuestion hook ensures selection in dontAsk/bypass mode

@@ -1,5 +1,24 @@
 # Release Notes
 
+## v2.0.0 (2026-03-06)
+
+### Breaking Changes
+- **Agent Teams → Built-in Subagents** (all three skills): Replaced experimental Agent Teams (`TeamCreate`/`TaskCreate`/`TaskUpdate`/`SendMessage`/`TeamDelete`) with built-in subagents via `Agent()`. Tools removed from `allowed-tools`: `TaskCreate`, `TaskUpdate`, `TaskList`, `TaskGet`, `TeamCreate`, `SendMessage`, `TeamDelete`. Env var `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` no longer required.
+- **Setup scripts install 3 items** (down from 4): Removed Agent Teams flag installation. Scripts now configure: ExitPlanMode hook, AskUserQuestion hook, and Model.
+
+### Added
+- **Test flow classification** (autonomous-tests + swarm Phase 2): Explore agent classifies each test scenario as `autonomous/api`, `autonomous/ui`, `guided/webapp`, or `guided/mobile`. Related projects with `relationship: "mobile"` produce `guided/mobile` classifications.
+- **Related project log verification** (autonomous-tests Phase 4): After each subagent completes, orchestrator checks related project logs for errors using discovered log commands with `--since` timestamp.
+- **Related project log commands** (autonomous-tests + swarm Phase 2): Explore agent discovers log commands per `relatedProjects[]` entry for post-test verification.
+- **Mobile test planning** (autonomous-tests Phase 5): `guided/mobile` tests included in pending-guided-tests output with physical device steps and verification commands.
+- **Explore agent thoroughness levels**: Explicit thoroughness guidance (`"quick"`, `"medium"`, `"very thorough"`) for Explore agent spawns.
+
+### Changed
+- **Subagent execution model** (autonomous-tests + autonomous-fixes): Sequential execution uses foreground subagents — spawn one at a time, results return directly, no shutdown protocol needed.
+- **Subagent execution model** (autonomous-tests-swarm): Parallel execution uses background subagents (`run_in_background: true`) — orchestrator notified on completion.
+- **Feature Context Document** (both testing skills): Now includes test flow classifications and related project log commands.
+- **CLAUDE.md**: "Task Execution via Agent Team" section rewritten as "Task Execution via Subagents" with updated spawning rules.
+
 ## v1.14.0 (2026-03-05)
 
 ### Added

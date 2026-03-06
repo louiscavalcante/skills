@@ -2,7 +2,7 @@
 
 Project-agnostic autonomous fix runner for Claude Code.
 
-Reads findings from `autonomous-tests` output (bugs, failed tests, security vulnerabilities), lets you select what to fix, plans and executes fixes via Agent Teams, verifies results, and updates documentation so `autonomous-tests` can re-test — creating a bidirectional test-fix loop.
+Reads findings from `autonomous-tests` output (bugs, failed tests, security vulnerabilities), lets you select what to fix, plans and executes fixes via subagents, verifies results, and updates documentation so `autonomous-tests` can re-test — creating a bidirectional test-fix loop.
 
 ## Table of Contents
 
@@ -31,7 +31,7 @@ Reads findings from `autonomous-tests` output (bugs, failed tests, security vuln
 - **Presents findings** for user selection — always prompts even in dontAsk/bypass mode
 - **Supports pre-selection** via arguments: `vulnerability`, `critical`, `high`, `all`, `file:<path>`
 - **Plans fixes** in plan mode with mandatory human approval
-- **Executes fixes** via Agent Teams with security-aware remediation for vulnerability items
+- **Executes fixes** via subagents with security-aware remediation for vulnerability items
 - **Verifies results** including security-specific checks (variant payloads, auth bypass, data leakage)
 - **Updates documentation** with resolution blocks, fix-results, and test-results annotations
 - **Signals re-test readiness** so `autonomous-tests` can verify fixes on next run
@@ -44,7 +44,6 @@ Reads findings from `autonomous-tests` output (bugs, failed tests, security vuln
 | python3 | Config hashing, validation | `python3 --version` |
 | autonomous-tests config | Project setup + findings | `.claude/autonomous-tests.json` must exist |
 | Test findings | Something to fix | `docs/_autonomous/` must contain findings |
-| Agent Teams flag | Parallel fix execution | Setup script handles this |
 
 ## Installation
 
@@ -60,27 +59,17 @@ Then run the setup script to configure required settings:
 bash ~/.claude/skills/louiscavalcante-skills/autonomous-fixes/scripts/setup-hook.sh
 ```
 
-The setup script configures four things in `~/.claude/settings.json`:
+The setup script configures three things in `~/.claude/settings.json`:
 1. **ExitPlanMode hook** — forces plan approval even in `dontAsk` mode
 2. **AskUserQuestion hook** — forces user selection prompt even in `dontAsk`/bypass mode
-3. **Agent Teams flag** — enables `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` for parallel execution
-4. **Model** — sets `claude-opus-4-6` as the default model
+3. **Model** — sets `claude-opus-4-6` as the default model
 
 ### Manual Install
 
 If you prefer not to use [skills.sh](https://skills.sh/):
 
 1. Clone the repo and copy the `autonomous-fixes/` directory into your Claude Code skills directory
-2. Enable Agent Teams and set the model — add to `~/.claude/settings.json`:
-   ```json
-   {
-     "env": {
-       "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
-     },
-     "model": "claude-opus-4-6"
-   }
-   ```
-3. (Optional) Add the global hooks — add to `~/.claude/settings.json` under `hooks.PreToolUse`:
+2. (Optional) Add the global hooks — add to `~/.claude/settings.json` under `hooks.PreToolUse`:
    ```json
    [
      {
@@ -129,7 +118,7 @@ Choose which findings to fix from the interactive selection prompt. Or use argum
 
 ### 4. Review & Execute
 
-The skill enters plan mode with a fix plan — review and approve before anything executes. Fixes run via Agent Teams, and results land in `docs/_autonomous/fix-results/`.
+The skill enters plan mode with a fix plan — review and approve before anything executes. Fixes run via subagents, and results land in `docs/_autonomous/fix-results/`.
 
 ### 5. Re-test
 
@@ -199,7 +188,7 @@ See [`references/templates.md`](references/templates.md) for exact output format
 Phase 0: Config       ← Validate autonomous-tests config, scan for findings
 Phase 1: Selection    ← Parse findings, present for user selection
 Phase 2: Plan         ← Read source code, design fixes (you approve)
-Phase 3: Execute      ← Agent Teams apply fixes
+Phase 3: Execute      ← subagents apply fixes
 Phase 4: Verify       ← Confirm fixes work, security checks for V-prefix
 Phase 5: Document     ← Generate fix-results, update pending-fixes/test-results
 Phase 6: Loop Signal  ← Signal readiness for re-testing
@@ -210,7 +199,7 @@ Phase 8: Advisory     ← Remind user to /clear before next skill
 - **Phase 0** validates the shared config and scans `_autonomous/` directories for findings.
 - **Phase 1** parses all findings, assigns IDs (V/F/T/G/A prefixes), deduplicates, and presents for selection. No source code is read until after selection.
 - **Phase 2** reads source code for selected items, traces code paths, performs dependency analysis, and designs fixes. Vulnerability items get enhanced context with full input-output tracing, regulatory assessment, and security-aware remediation design.
-- **Phase 3** spawns Agent Teams to execute fixes. Independent items run in parallel; dependent chains run sequentially.
+- **Phase 3** spawns subagents to execute fixes. Independent items run in parallel; dependent chains run sequentially.
 - **Phase 4** verifies each fix. V-prefix items get additional security verification with variant payloads and hardening checks.
 - **Phase 5** generates fix-results document, appends resolution blocks to pending-fixes, and annotates test-results.
 - **Phase 6** summarizes results and signals re-test readiness for the autonomous-tests loop.
@@ -297,7 +286,6 @@ The loop continues until all findings are resolved or marked as needing manual i
 |---|---|---|
 | "No autonomous-tests config found" | Haven't run autonomous-tests yet | Run `/autonomous-tests` first |
 | "No findings to fix" | No pending-fixes or test failures | Run `/autonomous-tests` to generate findings |
-| "Agent teams not enabled" | Missing feature flag | Run `bash scripts/setup-hook.sh` |
 | Config validation fails | Schema version mismatch | Delete `.claude/autonomous-tests.json`, re-run `/autonomous-tests` |
 | Trust verification fails | Config modified externally | Re-approve when prompted |
 | Fix marked UNABLE | Autonomous fix not possible | Review the item manually |

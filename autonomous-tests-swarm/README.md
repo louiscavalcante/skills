@@ -46,7 +46,6 @@ Use `autonomous-tests` when you have pre-existing test credentials and a running
 | python3 | Config hashing, validation | `python3 --version` |
 | Docker + Compose | Per-agent environment isolation | `docker --version && docker compose version` |
 | git | Diff analysis | `git --version` |
-| Agent Teams flag | Parallel agent coordination | Setup script handles this |
 | Sufficient disk space | N copies of Docker images/volumes | `docker system df` |
 
 ## Installation
@@ -63,27 +62,17 @@ Then run the setup script to configure required settings:
 bash ~/.claude/skills/louiscavalcante-skills/autonomous-tests-swarm/scripts/setup-hook.sh
 ```
 
-The setup script configures four things in `~/.claude/settings.json`:
+The setup script configures three things in `~/.claude/settings.json`:
 1. **ExitPlanMode hook** — forces plan approval even in `dontAsk` mode
 2. **AskUserQuestion hook** — forces user prompts even in `dontAsk`/bypass mode
-3. **Agent Teams flag** — enables `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` for parallel execution
-4. **Model** — sets `claude-opus-4-6` as the default model
+3. **Model** — sets `claude-opus-4-6` as the default model
 
 ### Manual Install
 
 If you prefer not to use [skills.sh](https://skills.sh/):
 
 1. Clone the repo and copy the `autonomous-tests-swarm/` directory into your Claude Code skills directory
-2. Enable Agent Teams and set the model — add to `~/.claude/settings.json`:
-   ```json
-   {
-     "env": {
-       "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
-     },
-     "model": "claude-opus-4-6"
-   }
-   ```
-3. (Optional) Add the global hooks — add to `~/.claude/settings.json` under `hooks.PreToolUse`:
+2. (Optional) Add the global hooks — add to `~/.claude/settings.json` under `hooks.PreToolUse`:
    ```json
    [
      {
@@ -313,7 +302,7 @@ Each agent follows this sequence:
 3. **Health check** — poll each service until healthy (60s timeout, 2 attempts)
 4. **Initialize** — run migrations, seeds, and setup commands
 5. **Execute tests** — run assigned suites against own API (using remapped ports)
-6. **Report** — send PASS/FAIL per suite via `SendMessage`
+6. **Report** — return PASS/FAIL per suite to orchestrator
 7. **Teardown** — stop and remove all containers, volumes, networks, `npm-dev` processes, temp files
 
 If an agent's environment fails to start, its suites are redistributed to a healthy agent.
@@ -325,7 +314,6 @@ If an agent's environment fails to start, its suites are redistributed to a heal
 | Problem | Cause | Fix |
 |---|---|---|
 | "Working tree is clean" | No changes with default scope | Use `/autonomous-tests-swarm N` for commits |
-| "Agent teams not enabled" | Missing feature flag | Run `bash scripts/setup-hook.sh` |
 | Port conflicts | Other services using the port range | Change `portRangeStart` in config |
 | Docker disk space warning | Not enough space for N stacks | Free Docker space: `docker system prune` |
 | Compose startup fails | Invalid compose file or missing images | Check `docker compose config` and pull images |

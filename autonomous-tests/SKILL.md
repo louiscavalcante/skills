@@ -5,9 +5,7 @@ description: 'Run autonomous E2E tests. Args: staged | unstaged | N (last N comm
 argument-hint: 'staged | unstaged | N | working-tree | file:<path> | rescan | guided'
 disable-model-invocation: true
 allowed-tools: Bash(*), Read(*), Write(*), Edit(*), Glob(*), Grep(*), Agent(*),
-  EnterPlanMode(*), ExitPlanMode(*), TaskCreate(*),
-  TaskUpdate(*), TaskList(*), TaskGet(*), TeamCreate(*),
-  SendMessage(*), TeamDelete(*), AskUserQuestion(*)
+  EnterPlanMode(*), ExitPlanMode(*), AskUserQuestion(*)
 hooks:
   PreToolUse:
     - matcher: ExitPlanMode
@@ -29,7 +27,6 @@ hooks:
 - Commits: !`git log --oneline -5 2>/dev/null`
 - Docker: !`docker compose ps 2>/dev/null | head -10 || echo "No docker-compose found"`
 - Config: !`test -f .claude/autonomous-tests.json && echo "YES" || echo "NO -- first run"`
-- Agent Teams: !`python3 -c "import json;s=json.load(open('$HOME/.claude/settings.json'));print('ENABLED' if s.get('env',{}).get('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS')=='1' else 'DISABLED')" 2>/dev/null || echo "DISABLED -- settings not found"`
 - Capabilities: !`python3 -c "import json;c=json.load(open('.claude/autonomous-tests.json'));caps=c.get('capabilities',{});mcps=len(caps.get('dockerMcps',[]));ab='Y' if caps.get('frontendTesting',{}).get('agentBrowser') else 'N';pw='Y' if caps.get('frontendTesting',{}).get('playwright') else 'N';ec=sum(1 for s in c.get('externalServices',[]) if s.get('cli',{}).get('available'));print(f'MCPs:{mcps} agent-browser:{ab} playwright:{pw} ext-clis:{ec} scanned:{caps.get(\"lastScanned\",\"never\")}')" 2>/dev/null || echo "NOT SCANNED"`
 
 ## Role
@@ -51,7 +48,7 @@ The main agent is the Orchestrator. It coordinates phases but NEVER executes ope
 - Run `date -u` for timestamps, `test -f` for file checks
 - Enter/exit plan mode
 - Use AskUserQuestion for user interaction
-- Use TeamCreate/TaskCreate/TaskUpdate/SendMessage for coordination
+- Use Agent() to spawn subagents for delegation
 - Compile summaries from agent reports
 - Make phase-gating decisions (proceed/stop/abort)
 
@@ -93,13 +90,12 @@ Print resolved scope, then proceed without waiting.
 **Config hash method**: `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"` — referenced throughout as "Config hash method".
 
 **Step 0: Prerequisites Check** — Read `~/.claude/settings.json`:
-1. **Agent teams flag**: `env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` must be `"1"`. If not → STOP: "Run `bash <skill-dir>/scripts/setup-hook.sh` to enable agent teams and the ExitPlanMode hook."
-2. **ExitPlanMode hook** (informational): if missing → inform user the skill-scoped hook handles it automatically; global setup available via the script. Continue.
-3. **AskUserQuestion hook** (informational): same as above. Continue.
+1. **ExitPlanMode hook** (informational): if missing → inform user the skill-scoped hook handles it automatically; global setup available via the script. Continue.
+2. **AskUserQuestion hook** (informational): same as above. Continue.
 
 **Step 1: Capabilities Scan** — Triggers: `rescan` arg, `capabilities` missing, or `lastScanned` older than `rescanThresholdDays` (default 7 days). If none → use cache.
 
-Spawn **Explore agent** (`subagent_type: "Explore"`, no `team_name`) to perform:
+Spawn **Explore agent** (`subagent_type: "Explore"`, thoroughness: `"medium"`) to perform:
 1. **Docker MCP Discovery**: `mcp-find` for MCPs matching service names and generic queries. Record `name`, `description`, `mode`; `safe: true` only for known sandbox MCPs. If unavailable → empty array.
 2. **Frontend Testing**: `which agent-browser`, `which playwright`/`npx playwright --version` → set `frontendTesting` booleans.
 3. **External Service CLI Detection**: Load `references/external-services-catalog.json`. Scan CLAUDE.md files for `claudeMdKeywords`. Per match: run `detectionCommand` → if unavailable, `cli.available: false` → if available, run `modeDetection.command` → pattern-match: production → `live`/blocked, sandbox → `sandbox`/unblocked, else → `unknown`/unblocked → warn if blocked → populate `allowedOperations`/`prohibitedFlags` → merge into `externalServices[]`.
@@ -125,7 +121,7 @@ Agent reports back. Orchestrator writes to `capabilities` with `lastScanned` = U
 9. Skip to Phase 1.
 
 ### If `CONFIG_MISSING` (first run):
-Spawn **Explore agent** (`subagent_type: "Explore"`, no `team_name`) for auto-extraction:
+Spawn **Explore agent** (`subagent_type: "Explore"`, thoroughness: `"medium"`) for auto-extraction:
 1. **Auto-extract** from CLAUDE.md files (deep scan) + compose + env + package manifests. Detect `migrationCommand`/`cleanupCommand` from compose, `scripts/`, Makefiles, package.json (`manage.py migrate`, `npx prisma migrate deploy`, `knex migrate:latest`, etc.). Detect seed commands.
    **DB type**: MongoDB (`mongosh`/`mongo`, `mongoose`/`mongodb`/`@typegoose`, `mongodb://`, mongo containers) vs SQL (`psql`/`mysql`/`sqlite3`, `pg`/`mysql2`/`sequelize`/`prisma`/`knex`/`typeorm`/`drizzle`/`sqlalchemy`/`django.db`, `postgres://`/`mysql://`/`sqlite:///`, SQL containers). Both found → ask user.
 2. **Topology**: `single` | `monorepo` (workspace configs, multiple `package.json`, `backend/`+`frontend/`) | `multi-repo` (CLAUDE.md cross-refs, sibling `.git`, shared docker-compose).
@@ -143,7 +139,7 @@ Agent reports. Orchestrator proceeds:
 
 **Objective**: Verify the environment is safe and ready for testing.
 
-Spawn ONE **general-purpose agent** (`model: "opus"`, no `team_name`) to perform:
+Spawn ONE **general-purpose subagent** (foreground) to perform:
 1. **Production scan**: `.env` files for `productionIndicators`, `*LIVE*SECRET*`, `NODE_ENV=production`, production DB endpoints (RDS, Atlas without dev/stg/test), non-local URLs. Show variable NAME only.
 2. Run `sandboxCheck` commands from config.
 3. Verify Docker is local.
@@ -161,7 +157,7 @@ Agent reports: safety assessment + Service Readiness Report. Gates: **ABORT** if
 
 Fully autonomous — derive from code diff, codebase, or guided source. Never ask what to test.
 
-**Delegation**: ONE Explore agent (`subagent_type: "Explore"`, no `team_name` — pre-team).
+**Delegation**: ONE Explore agent (`subagent_type: "Explore"`, thoroughness: `"medium"`).
 
 ### Standard mode
 1. Changed files from git (scope args) — include `relatedProjects[].path` for cross-project deps.
@@ -172,6 +168,8 @@ Fully autonomous — derive from code diff, codebase, or guided source. Never as
    - **Smart doc analysis**: (a) match paths/features/endpoints against `docs/` (read relevant only), (b) `_autonomous/` scan (Summary + Issues Found only, extract prior failures/bugs), (c) fix completion scan (`RESOLVED`+`PASS` → regression targets, `Ready for Re-test: YES` → priority)
    - **Edge case inventory**: error handlers, validation branches, race conditions, retry logic
    - **Cross-project seed map**: For each `relatedProjects[]`, trace which collections/tables in the related project's database are read by the main project's E2E flows (shared users, linked entities, cross-service references). Per dependency: related project name, collection/table, required fields, relationship to main project data, connection command from `relatedProjects[].database.connectionCommand` or inferred from config.
+   - **Test flow classification**: Classify each test scenario as `autonomous/api` (API-only, no UI), `autonomous/ui` (browser automation needed), `guided/webapp` (user performs actions in web browser), or `guided/mobile` (user performs actions on physical mobile device). For related projects with `relationship: "mobile"`, trace user flows → classify as `guided/mobile`.
+   - **Related project log commands**: Discover log commands per `relatedProjects[]` entry — from `logCommand` field, or inferred from `startCommand`/compose config. Record for post-test log verification.
 4. Receive structured report.
 
 ### Guided mode (user augmentation)
@@ -204,7 +202,7 @@ Compile **Targeted Regression Context Document** (replaces Feature Context Docum
 - Environment/capabilities (same as Feature Context Document)
 
 ### Feature Context Document (standard/guided modes — skipped in regression mode)
-Compile from Explore report (do NOT re-read files). Contents: features, endpoints, DB collections/tables, cross-project seed map (related project DB dependencies with collection/table, required fields, connection commands), external services, edge cases, test history, file reference content, capabilities. Guided mode adds `Mode` + `Source` at top. Cascaded to every Phase 4 agent.
+Compile from Explore report (do NOT re-read files). Contents: features, endpoints, DB collections/tables, cross-project seed map (related project DB dependencies with collection/table, required fields, connection commands), test flow classifications, related project log commands, external services, edge cases, test history, file reference content, capabilities. Guided mode adds `Mode` + `Source` at top. Cascaded to every Phase 4 agent.
 
 ## Phase 3 — Plan (Plan Mode)
 
@@ -213,7 +211,7 @@ Compile from Explore report (do NOT re-read files). Contents: features, endpoint
 **Step 0 — Context Reload** (for post-approval reconstruction):
 - Re-read: SKILL.md, config, `references/templates.md`
 - Scope: `$ARGUMENTS`, branch, commit range
-- Findings: Phase 2 discoveries (modules, endpoints, dependencies)
+- Findings: Phase 2 discoveries (modules, endpoints, dependencies, test flow classifications, related project log commands)
 - User context: flaky areas, priorities, notes
 - Service Readiness Report from Phase 1 (agents use directly, MUST NOT start services or re-check health)
 - If regression mode: fix manifest, 1-hop impact zone, original test IDs, Targeted Regression Context Document
@@ -232,22 +230,16 @@ Compile from Explore report (do NOT re-read files). Contents: features, endpoint
 
 - Execution Protocol — autonomous mode (embed verbatim — orchestrator uses this after context reset):
   ```
-  TEAM: TeamCreate → general-purpose team (team_name for all agents)
-  MODEL: Always model: "opus"
-  SETUP AGENT: Spawn first (general-purpose, opus, team_name). Reads source files, compiles Feature Context Document, reports via SendMessage. Shut down before suite agents.
-  FLOW: STRICTLY SEQUENTIAL — one suite agent at a time:
-    1. TaskCreate per suite (env, steps, verification, teardown, Feature Context Document, credential role name, Service Readiness Report, DB lifecycle, browser priority chain)
-    2. TaskUpdate with owner
-    3. For each suite (in order):
-       a. Spawn ONE agent (general-purpose, opus, team_name)
-       b. Assign via TaskUpdate
-       c. BLOCK — wait for completion
-       d. SendMessage type: "shutdown_request"
-       e. Wait for shutdown confirmation
-       f. Report PASS/FAIL
-       g. Next suite
-  PROHIBITED: multiple agents alive, spawning N+1 before N shutdown, parallel execution, main-conversation execution
-  SHUTDOWN: SendMessage shutdown_request to all teammates after completion
+  SETUP: Spawn general-purpose subagent (foreground). Reads source files, compiles Feature Context Document, returns results.
+  FLOW: STRICTLY SEQUENTIAL — one subagent at a time:
+    1. For each suite (in order):
+       a. Spawn ONE general-purpose subagent (foreground)
+       b. Provide in prompt: full context (env, steps, verification, teardown, Feature Context Document, credentials, Service Readiness Report, DB lifecycle, browser priority chain, related project log commands, test flow type)
+       c. BLOCK — foreground = automatic blocking
+       d. Receive results directly
+       e. Record PASS/FAIL
+       f. Next suite
+  PROHIBITED: multiple concurrent subagents, parallel execution, main-conversation execution
   AUDIT: agents spawned count, suites executed, cleanup status
   ```
 
@@ -257,13 +249,12 @@ Compile from Explore report (do NOT re-read files). Contents: features, endpoint
   NO BROWSER AUTOMATION: agent-browser and Playwright MUST NOT be loaded
   CATEGORIES: Happy-path workflows ONLY
   FLOW: For each guided test (in order):
-    1. Spawn ONE agent for DB seeding + external service setup
-    2. Agent seeds database, configures services
-    3. Agent reports readiness → shut down
-    4. Orchestrator presents steps to user via AskUserQuestion
-    5. User performs actions on real device/browser
-    6. Orchestrator verifies results via DB queries/API/logs
-    7. Record PASS/FAIL → next test
+    1. Spawn ONE general-purpose subagent (foreground) for DB seeding + external service setup
+    2. Subagent seeds database, configures services, returns readiness status
+    3. Orchestrator presents steps to user via AskUserQuestion
+    4. User performs actions on real device/browser
+    5. Orchestrator verifies results via DB queries/API/logs
+    6. Record PASS/FAIL → next test
   PROHIBITED: agent-browser, Playwright, security/edge-case/validation tests
   ```
 
@@ -286,15 +277,15 @@ Each suite: name, objective, pre-conditions, steps + expected outcomes, teardown
 - Suite 2 "Impact Zone" (conditional): tests for 1-hop callers/callees — only categories where modified code is relevant (e.g., validation fix → Category 2; auth fix → Categories 4, 7; DB fix → Category 5). Skip categories with no code path overlap.
 - No other suites — unaffected areas excluded
 - State in plan: "Targeted regression re-test — scope limited to fix verification and 1-hop impact zone"
-- Execution protocol: unchanged (same TeamCreate/sequential flow, just fewer suites)
+- Execution protocol: unchanged (same subagent sequential flow, just fewer suites)
 
 **Wait for user approval.**
 
-## Phase 4 — Execution (Agent Teams)
+## Phase 4 — Execution (Subagents)
 
-`TeamCreate` → spawn `general-purpose` agents sequentially. Always `model: "opus"`. Coordinate via `TaskCreate`/`TaskUpdate`/`SendMessage`.
+Spawn `general-purpose` subagents sequentially (foreground). Each subagent receives full context in its prompt and returns results directly.
 
-**Setup agent** (mandatory): spawn first (`general-purpose`, `opus`, `team_name`) to read source files, compile Feature Context Document, report via `SendMessage`. Shut down after.
+**Setup agent** (mandatory): spawn first (general-purpose subagent, foreground) to read source files, compile Feature Context Document, return results. Proceeds after completion.
 
 **Credential assignment**: Rotate role names from `testCredentials` across suites. Task descriptions include only the **role name** — never values or env var refs. Agents resolve at runtime.
 
@@ -324,38 +315,36 @@ Each suite: name, objective, pre-conditions, steps + expected outcomes, teardown
 Verify against source: read model/serializer/DTO to confirm field exists in real schema — not test data. False positives MUST NOT be reported. Each finding: Severity, Regulatory impact, Exploitability, Compliance risk → `### API Response Security` subsection.
 
 **Execution flow**:
-1. `TaskCreate` per suite — include: env details, steps, verification queries, teardown, Feature Context Document, credential **role name**, browser tools/status, Service Readiness Report (use directly, no re-check), DB lifecycle:
+1. For each suite, prepare prompt including: env details, steps, verification queries, teardown, Feature Context Document, credential **role name**, browser tools/status, Service Readiness Report (use directly, no re-check), related project log commands, test flow type, DB lifecycle:
    - Pre-test: `migrationCommand` → seed (`autonomous`: create with `testDataPrefix`; `command`: run `seedCommand`)
    - **Seed schema discovery** (mandatory for autonomous seeding — applies to ALL databases in the E2E flow, including related projects): Before inserting into ANY collection/table: (1) query for a real document/row (`findOne`/`SELECT * LIMIT 1` without test prefix filter) to use as schema template, (2) if empty, read the backend service code that creates documents in that collection (look for `insertOne`/`find_one_and_update`/`INSERT`/ORM create calls), (3) mirror the discovered schema exactly — never invent fields or change types (ObjectId vs string, Date vs string, etc.), (4) only add `_testPrefix` marker as extra field, (5) for related project collections: use the connection command from `relatedProjects[]` config or the cross-project seed map in the Feature Context Document. After all seeds (main + related): hit the API read endpoints to verify serialization before proceeding.
    - Verification: `connectionCommand` for queries
    - Post-test: `cleanupCommand` or clean `testDataPrefix` data. Order: migrate → seed → test → cleanup.
    - Browser: include workflow + priority chain. "Do NOT skip browser suites."
-2. `TaskUpdate` with `owner`
-3. Strictly sequential:
+2. Strictly sequential:
    ```
-   for each suite_task in approved_suite_tasks (in order):
-       1. Spawn ONE agent (general-purpose, opus, team_name)
-       2. Assign via TaskUpdate
-       3. BLOCK — wait for completion
-       4. Shut down via SendMessage shutdown_request
-       5. Wait for shutdown confirmation
-       6. Report PASS/FAIL
+   for each suite in approved_suites (in order):
+       1. Spawn ONE general-purpose subagent (foreground)
+       2. Provide full context in prompt
+       3. BLOCK — foreground = automatic blocking
+       4. Receive results directly
+       5. Record PASS/FAIL
+       6. Check related project logs for errors (using log commands from Phase 2, with --since timestamp)
        7. Proceed to next
    ```
-   Prohibited: multiple agents alive, spawning N+1 before N shut down, concurrent assignment, parallel execution, main-conversation execution.
-4. PASS/FAIL + anomalies after each suite
-5. Shut down all teammates after completion
-6. **Audit summary**: agents spawned, suites executed, docker exec count, cleanup status
+   Prohibited: multiple concurrent subagents, parallel execution, main-conversation execution.
+3. PASS/FAIL + anomalies after each suite
+4. **Audit summary**: agents spawned, suites executed, docker exec count, cleanup status
 
 ## Phase 5 — Results & Docs
 
 **Objective**: Process results, generate documentation, clean up test data.
 
-**Fix cycle**: Runtime-fixable (env/container/stuck job) → delegate fix to agent → re-run suite → max 3 cycles. Code bug → document (file, line, expected vs actual) → ask user.
+**Fix cycle**: Runtime-fixable (env/container/stuck job) → spawn general-purpose subagent (foreground) to fix → re-run suite → max 3 cycles. Code bug → document (file, line, expected vs actual) → ask user.
 
-**Documentation**: Delegate to agent. Timestamp via `date -u +"%Y-%m-%d-%H-%M-%S"`. Pattern: `{timestamp}_{semantic-name}.md`. Read `references/templates.md` first. Four doc types: test-results (always), pending-fixes (bugs/infra issues), pending-guided-tests (browser/visual/physical), pending-autonomous-tests (identified but not run). Re-runs → append "Re-run" section.
+**Documentation**: Spawn general-purpose subagent (foreground). Timestamp via `date -u +"%Y-%m-%d-%H-%M-%S"`. Pattern: `{timestamp}_{semantic-name}.md`. Read `references/templates.md` first. Four doc types: test-results (always), pending-fixes (bugs/infra issues), pending-guided-tests (browser/visual/physical — include `guided/mobile` tests with physical device steps and verification commands), pending-autonomous-tests (identified but not run). Re-runs → append "Re-run" section.
 
-**Cleanup**: Delegate to agent. Remove `testDataPrefix` data only. Never touch pre-existing. Log actions. Verify with DB query.
+**Cleanup**: Spawn general-purpose subagent (foreground). Remove `testDataPrefix` data only. Never touch pre-existing. Log actions. Verify with DB query.
 
 ## Phase 6 — Finalize
 
@@ -370,8 +359,8 @@ Verify against source: read model/serializer/DTO to confirm field exists in real
 | No production | Never modify production data or connect to production services |
 | No credentials in output | Never expose credentials, keys, tokens, or env var values — pass role names only |
 | Plan before execution | Phase 3 plan mode required before any test execution |
-| Agent Teams only | TeamCreate → TaskCreate → agents with `team_name`. Plain `Agent` without `team_name` PROHIBITED in Phases 4-5 |
-| Always opus | All agents spawned with `model: "opus"` |
+| Subagents only | All execution via Agent(subagent_type: "general-purpose"). Main-conversation execution PROHIBITED |
+| Model inheritance | Subagents inherit from main conversation — ensure Opus is set |
 | Strictly sequential | One agent at a time in Phases 4-5. Spawn → complete → shut down → next |
 | Explore agents read-only | No file edits or state-modifying commands |
 | UTC timestamps | Via `date -u` only, never guess |
@@ -401,8 +390,8 @@ Verify against source: read model/serializer/DTO to confirm field exists in real
 | Docker scope | Local only — Phase 1 aborts on production indicators |
 | Credential scope | Env var references only — raw values forbidden, redacted on display |
 | MCP scope | `safe: true` only |
-| Agent lifecycle | One suite agent at a time in Phases 4-5 |
-| Explore agent scope | One per Phase 2. Read-only. No `team_name` |
+| Subagent lifecycle | One foreground subagent at a time in Phases 4-5 |
+| Explore agent scope | One per Phase 2. Read-only |
 | External CLI scope | `allowedOperations` only. Per-run confirmation. Blocked when `cli.blocked` |
 | System commands | `which`, `docker compose ps`, `git branch`/`diff`/`log`, `test -f`, `find . -maxdepth 3 -name "CLAUDE.md" -type f`, `date -u`, `curl -sf` localhost, `python3 -c` json/hashlib only |
 | External downloads | Docker images via user's compose only. Playwright browsers if present. No other downloads |

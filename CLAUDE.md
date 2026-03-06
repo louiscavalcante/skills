@@ -95,20 +95,20 @@ When the plan is accepted:
 - Therefore, all relevant discoveries, assumptions, constraints, and prior findings must be embedded at the beginning of the plan.
 - The plan must contain sufficient context to prevent duplicated exploration or repeated actions after reset.
 
-### Task Execution via Agent Team
+### Task Execution via Subagents
 
 Once in plan execution mode:
 
-- Tasks must be executed using the **Agent Team** feature (Claude Code).
-- Each skill integrates with Agent Team differently—respect those differences.
+- Tasks must be executed using **built-in subagents** via `Agent()`.
+- Each skill integrates with subagents differently—respect those differences.
 
-Agent spawning rules per skill:
+Subagent spawning rules per skill:
 
-- **autonomous-tests** → Must execute tasks sequentially. Spawn one agent at a time. Wait for completion before spawning the next.
-- **autonomous-fixes** → Must execute tasks sequentially. Spawn one agent at a time. Wait for completion before spawning the next.
-- **autonomous-tests-swarm** → May spawn multiple Agent Team agents in parallel.
+- **autonomous-tests** → Sequential. One foreground subagent at a time.
+- **autonomous-fixes** → Sequential. One foreground subagent at a time.
+- **autonomous-tests-swarm** → Parallel. Multiple background subagents (`run_in_background: true`).
 
-Only **autonomous-tests-swarm** is allowed to run multiple concurrent agents. The other two skills must always operate one-by-one.
+Only **autonomous-tests-swarm** may run concurrent subagents. The other two operate one-by-one.
 
 ### Additional Constraints
 

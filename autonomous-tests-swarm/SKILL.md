@@ -4,9 +4,7 @@ description: 'Run autonomous E2E tests with per-agent Docker isolation. Each age
 argument-hint: 'staged | unstaged | N | working-tree | file:<path> | rescan | guided'
 disable-model-invocation: true
 allowed-tools: Bash(*), Read(*), Write(*), Edit(*), Glob(*), Grep(*), Agent(*),
-  EnterPlanMode(*), ExitPlanMode(*), TaskCreate(*),
-  TaskUpdate(*), TaskList(*), TaskGet(*), TeamCreate(*),
-  SendMessage(*), TeamDelete(*), AskUserQuestion(*)
+  EnterPlanMode(*), ExitPlanMode(*), AskUserQuestion(*)
 hooks:
   PreToolUse:
     - matcher: ExitPlanMode
@@ -30,7 +28,6 @@ hooks:
 - Docker Context: !`docker context show 2>/dev/null || echo "unknown"`
 - Config: !`test -f .claude/autonomous-tests.json && echo "YES" || echo "NO -- first run"`
 - Swarm Config: !`python3 -c "import json;c=json.load(open('.claude/autonomous-tests.json'));print('YES' if 'swarm' in c else 'NO -- needs setup')" 2>/dev/null || echo "NO -- config missing"`
-- Agent Teams: !`python3 -c "import json;s=json.load(open('$HOME/.claude/settings.json'));print('ENABLED' if s.get('env',{}).get('CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS')=='1' else 'DISABLED')" 2>/dev/null || echo "DISABLED -- settings not found"`
 - Capabilities: !`python3 -c "import json;c=json.load(open('.claude/autonomous-tests.json'));caps=c.get('capabilities',{});mcps=len(caps.get('dockerMcps',[]));ab='Y' if caps.get('frontendTesting',{}).get('agentBrowser') else 'N';pw='Y' if caps.get('frontendTesting',{}).get('playwright') else 'N';ec=sum(1 for s in c.get('externalServices',[]) if s.get('cli',{}).get('available'));print(f'MCPs:{mcps} agent-browser:{ab} playwright:{pw} ext-clis:{ec} scanned:{caps.get(\"lastScanned\",\"never\")}')" 2>/dev/null || echo "NOT SCANNED"`
 
 ## Role
@@ -52,7 +49,7 @@ The main agent is the Orchestrator. It coordinates phases but NEVER executes ope
 - Run `date -u` for timestamps, `test -f` for file checks
 - Enter/exit plan mode
 - Use AskUserQuestion for user interaction
-- Use TeamCreate/TaskCreate/TaskUpdate/SendMessage for coordination
+- Use Agent() to spawn subagents for delegation
 - Compile summaries from agent reports
 - Make phase-gating decisions (proceed/stop/abort)
 
@@ -93,15 +90,14 @@ Print resolved scope, then proceed without waiting.
 
 **Step 0: Prerequisites Check** — read `~/.claude/settings.json`:
 
-1. **Agent teams flag**: verify `env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` is `"1"`. If not, **STOP**: tell user to run `bash <skill-dir>/scripts/setup-hook.sh`.
-2. **ExitPlanMode hook** (informational): if absent, inform user it's skill-scoped and works automatically. Continue.
-3. **AskUserQuestion hook** (informational): same as above. Continue.
+1. **ExitPlanMode hook** (informational): if absent, inform user it's skill-scoped and works automatically. Continue.
+2. **AskUserQuestion hook** (informational): same as above. Continue.
 
 **Step 1: Capabilities Scan** — delegate to Explore agent.
 
 Triggers: `rescan` present, `capabilities` missing, or `lastScanned` older than `rescanThresholdDays` (default 7). If none, use cache.
 
-Spawn ONE Explore agent (`subagent_type: "Explore"`, no `team_name`) for three parallel checks:
+Spawn ONE Explore agent (`subagent_type: "Explore"`, thoroughness: `"medium"`) for three parallel checks:
 1. **Docker MCP Discovery**: `mcp-find` with service names and generic queries. Record `name`, `description`, infer `mode`, `safe: true` only for sandbox MCPs. If unavailable, `dockerMcps: []`.
 2. **Frontend Testing**: `which agent-browser`, `which playwright`/`npx playwright --version` → set `frontendTesting` booleans.
 3. **External Service CLI Detection**: load `autonomous-tests/references/external-services-catalog.json`. Scan CLAUDE.md files for `claudeMdKeywords`. For matches: run `detectionCommand` → `modeDetection.command` → pattern-match: `production` → blocked; `sandbox` → allowed; no match → allowed. Populate `cli.*` fields. Merge into `externalServices[]`.
@@ -162,7 +158,7 @@ Delegate auto-extract to Explore agent:
 
 Single objective: verify safe, reserve ports, validate Docker.
 
-Spawn ONE general-purpose agent. Agent performs:
+Spawn ONE general-purpose subagent (foreground). Agent performs:
 
 1. **Production scan**: `.env` files for `productionIndicators`, `*LIVE*SECRET*`, `NODE_ENV=production`, production DB endpoints, non-local URLs. Show variable NAME only.
 2. Run `sandboxCheck` commands from config
@@ -186,7 +182,7 @@ Orchestrator: **ABORT** if production detected. Keep port assignments for Phase 
 
 Fully autonomous — derive from code diff, codebase, or guided source. Never ask user what to test.
 
-Spawn ONE Explore agent (`subagent_type: "Explore"`, no `team_name`).
+Spawn ONE Explore agent (`subagent_type: "Explore"`, thoroughness: `"medium"`).
 
 ### Standard mode
 
@@ -198,6 +194,8 @@ Spawn ONE Explore agent (`subagent_type: "Explore"`, no `team_name`).
    - **Smart doc analysis**: (a) match paths/features/endpoints against `docs/` tree, (b) `_autonomous/` scan — Summary + Issues Found only, extract prior failures/bugs, (c) fix completion scan — `Status: RESOLVED` + `Verification: PASS` → regression targets, `Ready for Re-test: YES` → priority re-test
    - **Edge case inventory**: error handlers, validation branches, race conditions, retry logic
    - **Cross-project seed map**: For each `relatedProjects[]`, trace which collections/tables in the related project's database are read by the main project's E2E flows (shared users, linked entities, cross-service references). Per dependency: related project name, collection/table, required fields, relationship to main project data, connection command from `relatedProjects[].database.connectionCommand` or inferred from config.
+   - **Test flow classification**: Classify each test scenario as `autonomous/api` (API-only, no UI), `autonomous/ui` (browser automation needed), `guided/webapp` (user performs actions in web browser), or `guided/mobile` (user performs actions on physical mobile device). For related projects with `relationship: "mobile"`, trace user flows → classify as `guided/mobile`.
+   - **Related project log commands**: Discover log commands per `relatedProjects[]` entry — from `logCommand` field, or inferred from `startCommand`/compose config. Record for post-test log verification.
 4. Receive agent report
 
 ### Guided mode (user augmentation — single agent)
@@ -233,7 +231,7 @@ Compile **Targeted Regression Context Document** (replaces Feature Context Docum
 
 ### Feature Context Document (standard/guided modes — skipped in regression mode)
 
-Compile from agent report (do NOT re-read analyzed files). Contains: features, endpoints, DB tables/collections, cross-project seed map (related project DB dependencies with collection/table, required fields, connection commands), external services, edge cases, prior history, capabilities. Guided mode adds `Mode:` and `Source:` at top. Cascaded to all agents in Phase 4.
+Compile from agent report (do NOT re-read analyzed files). Contains: features, endpoints, DB tables/collections, cross-project seed map (related project DB dependencies with collection/table, required fields, connection commands), test flow classifications, related project log commands, external services, edge cases, prior history, capabilities. Guided mode adds `Mode:` and `Source:` at top. Cascaded to all agents in Phase 4.
 
 ## Phase 3 — Plan (Plan Mode)
 
@@ -254,38 +252,31 @@ Compile from agent report (do NOT re-read analyzed files). Contains: features, e
 
 - Execution Protocol — autonomous mode (embed verbatim — orchestrator uses this after context reset):
   ```
-  TEAM: TeamCreate → general-purpose team (team_name for all agents)
-  MODEL: Always model: "opus"
-  SETUP AGENT: Spawn first (general-purpose, opus, team_name). Creates agent dirs, generates modified compose/docker scripts with remapped ports, copies+remaps env files, validates configs, freezes capabilities snapshot, applies resource limits + Docker labels, reads source files, reports via SendMessage. Shut down before suite agents.
-  FLOW: PARALLEL — multiple suite agents simultaneously:
+  SETUP: Spawn general-purpose subagent (foreground). Creates agent dirs, generates modified compose/docker scripts with remapped ports, copies+remaps env files, validates configs, freezes capabilities snapshot, applies resource limits + Docker labels, reads source files, returns specs.
+  FLOW: PARALLEL — background subagents:
     1. Set Docker context
     2. Confirm port ranges
-    3. TaskCreate per suite (agent spec: project name swarm-{N}, ports, Docker context, compose path, frozen capabilities, Feature Context Document)
-    4. Spawn agents with team_name, assign via TaskUpdate
-    5. All agents execute in parallel
-  FAILURE: redistribute failed agent's suites to healthy agents. Failed agent tears down immediately.
-  POST-COMPLETION:
-    - Docker cleanup: filter by name (swarm-) + labels (com.autonomous-swarm.session={sessionId})
-    - Merge audit logs → audit-summary.json
-    - rm -rf /tmp/autonomous-swarm-{sessionId}
-  SHUTDOWN: SendMessage type: "shutdown_request" to all teammates
+    3. Spawn ALL suite subagents simultaneously (run_in_background: true)
+    4. Each receives in prompt: pre-generated specs (swarm-{N}, ports, Docker context, compose path), frozen capabilities, Feature Context Document
+    5. All subagents execute in parallel — orchestrator notified on completion
+  FAILURE: Spawn replacement background subagent for failed suite
+  POST-COMPLETION: Spawn foreground subagent for Docker cleanup + audit merge + temp dir removal
   ```
 
 - Execution Protocol — guided mode (embed verbatim):
   ```
   MODE: User augmentation
   NO BROWSER AUTOMATION: agent-browser and Playwright MUST NOT be loaded
-  NO PARALLEL AGENTS: Guided mode overrides parallel protocol. One agent at a time, sequential.
+  NO PARALLEL SUBAGENTS: Guided mode overrides parallel protocol. One foreground subagent at a time, sequential.
   CATEGORIES: Happy-path workflows ONLY
   FLOW: For each guided test (in order):
-    1. Spawn ONE agent for DB seeding + external service setup
-    2. Agent seeds database, configures services
-    3. Agent reports readiness → shut down
-    4. Orchestrator presents steps to user via AskUserQuestion
-    5. User performs actions on real device/browser
-    6. Orchestrator verifies results via DB queries/API/logs
-    7. Record PASS/FAIL → next test
-  PROHIBITED: agent-browser, Playwright, parallel agents, security/edge-case/validation tests
+    1. Spawn ONE general-purpose subagent (foreground) for DB seeding + external service setup
+    2. Subagent seeds database, configures services, returns readiness status
+    3. Orchestrator presents steps to user via AskUserQuestion
+    4. User performs actions on real device/browser
+    5. Orchestrator verifies results via DB queries/API/logs
+    6. Record PASS/FAIL → next test
+  PROHIBITED: agent-browser, Playwright, parallel subagents, security/edge-case/validation tests
   ```
 
 **Test categories** — standard (autonomous): all 9. Guided mode (both sub-modes): category 1 ONLY. Categories 2-9 never in guided. Non-happy-path findings queued as pending-autonomous-tests.
@@ -309,14 +300,14 @@ Each suite: name, objective, pre-conditions, steps + expected outcomes, teardown
 - Suite 2 "Impact Zone" (conditional): tests for 1-hop callers/callees — only categories where modified code is relevant (e.g., validation fix → Category 2; auth fix → Categories 4, 7; DB fix → Category 5). Skip categories with no code path overlap.
 - No other suites — unaffected areas excluded
 - State in plan: "Targeted regression re-test — scope limited to fix verification and 1-hop impact zone"
-- Execution protocol: unchanged (same TeamCreate/parallel flow, just fewer suites)
+- Execution protocol: unchanged (same subagent parallel flow, just fewer suites)
 - **Swarm efficiency note**: If regression scope produces <=2 suites, swarm Docker isolation overhead may exceed the benefit. The plan should note this but still execute as configured.
 
 **Wait for approval.**
 
 ## Phase 4 — Execution (Agent Swarm)
 
-`TeamCreate` → spawn `general-purpose` agents (one per suite or grouped). **Always `model: "opus"`**. All parallel. Coordinate via `TaskCreate`/`TaskUpdate`/`SendMessage`.
+Spawn `general-purpose` subagents (one per suite or grouped). All parallel via `run_in_background: true`. Results returned directly to orchestrator.
 
 **Cascading context**: every agent gets full Feature Context Document from Phase 2.
 
@@ -328,7 +319,7 @@ Each suite: name, objective, pre-conditions, steps + expected outcomes, teardown
 
 **API Response Security Inspection**: exposed IDs, leaked credentials, PII, compliance. **Source verification mandatory** — read model/serializer/DTO definitions. Synthetic data findings are false positives.
 
-**Setup agent (MANDATORY)** — spawn first (`general-purpose`, `model: "opus"`, `team_name`):
+**Setup agent (MANDATORY)** — spawn first (general-purpose subagent, foreground):
 1. Create `/tmp/autonomous-swarm-{sessionId}/agent-{N}/` per agent
 2. Generate modified compose files / docker run scripts — remapped ports, namespaced names, related project files
 3. npm-dev services: copy projects, set up `node_modules` per `nodeModulesStrategy` (`symlink` default → `ln -s`, `hardlink` → `cp -al` with `cp -r` fallback, `copy` → `cp -r`)
@@ -339,9 +330,9 @@ Each suite: name, objective, pre-conditions, steps + expected outcomes, teardown
 8. Inject resource limits if configured (compose: `mem_limit`/`cpus`/`read_only`/`tmpfs`; raw: `--memory`/`--cpus`/`--read-only`/`--tmpfs`)
 9. Apply Docker labels: `com.autonomous-swarm.managed=true`, `.session={sessionId}`, `.agent={N}`
 10. Read key source files for context
-11. Report via `SendMessage`: validated specs + Feature Context Document
+11. Return validated specs + Feature Context Document
 
-Orchestrator waits for setup completion, then spawns suite agents with pre-generated specs. Setup agent shut down.
+Orchestrator receives setup results, then spawns suite subagents with pre-generated specs.
 
 **Suite agent tasks (a-l)**:
 - **a. Spec**: project name `swarm-{N}`, ports, Docker context, compose path
@@ -353,17 +344,17 @@ Orchestrator waits for setup completion, then spawns suite agents with pre-gener
 - **g. Init**: run `swarm.initialization.commands` with namespace resolution. Wait `waitAfterStartSeconds`. Related project init.
 - **h. DB seeding**: adapted `migrationCommand`, `seedCommand`, `connectionCommand`, `cleanupCommand` with `swarm-{N}` namespace. **Seed schema discovery** (mandatory for autonomous seeding — applies to ALL databases in the E2E flow, including related projects): Before inserting into ANY collection/table: (1) query for a real document/row (`findOne`/`SELECT * LIMIT 1` without test prefix filter) to use as schema template, (2) if empty, read the backend service code that creates documents in that collection (look for `insertOne`/`find_one_and_update`/`INSERT`/ORM create calls), (3) mirror the discovered schema exactly — never invent fields or change types (ObjectId vs string, Date vs string, etc.), (4) only add `_testPrefix` marker as extra field, (5) for related project collections: use the connection command from `relatedProjects[]` config or the cross-project seed map in the Feature Context Document. After all seeds (main + related): hit the API read endpoints (via the agent's remapped ports) to verify serialization before proceeding to test execution.
 - **i. Execute**: test suites against agent's API (remapped ports)
-- **j. Report**: PASS/FAIL + anomalies via `SendMessage`
+- **j. Report**: PASS/FAIL + anomalies returned to orchestrator
 - **k. Audit** (when enabled): `agent-{N}.json` → `schemaVersion: "1.0"`, agentId, suites, environment, timeline (`{ timestamp, action, target, result }`), configuredLimits (no `docker stats`), teardown status, duration
 - **l. Teardown (ALWAYS)**: compose `down -v --remove-orphans` / raw docker stop+rm+network rm / npm-dev kill PIDs / remove agent temp dir / verify no lingering containers
 
 **Execution flow**:
 1. Set Docker context
 2. Confirm port ranges
-3. Create tasks, spawn agents with `team_name`, assign via `TaskUpdate`
-4. All parallel
-5. **Failure redistribution**: failed agent's suites → healthy agent. Failed agent tears down.
-6. Post-completion Docker cleanup verification:
+3. Spawn all suite subagents (`run_in_background: true`) with pre-generated specs in prompt
+4. All parallel — orchestrator notified on completion
+5. **Failure redistribution**: failed subagent's suites → spawn replacement background subagent. Failed subagent tears down.
+6. Post-completion Docker cleanup verification (spawn foreground subagent):
    - Name-based: `docker ps -a --filter name=swarm- -q` → empty
    - Label-based: `docker ps -a --filter label=com.autonomous-swarm.session={sessionId} -q` → empty
    - Networks: `docker network ls --filter label=...session={sessionId} -q` → empty
@@ -371,7 +362,6 @@ Orchestrator waits for setup completion, then spawns suite agents with pre-gener
    - Clean orphans if any
 7. Merge audit logs (when enabled) → `audit-summary.json` (`schemaVersion: "1.0"`, metadata, per-agent, totals, cleanup verification)
 8. `rm -rf /tmp/autonomous-swarm-{sessionId}`
-9. Shut down via `SendMessage` `type: "shutdown_request"`
 
 ## Phase 5 — Results & Docs
 
@@ -404,8 +394,8 @@ When `swarm.audit.enabled`: append "Execution Audit" section (agent count, durat
 | No production data/connections | All |
 | No credentials in output | All |
 | Plan mode before execution | Phase 3 |
-| Delegate via TeamCreate flow | Phases 4-5 |
-| Always `model: "opus"` | Phases 4-5 |
+| Delegate via subagents | Phases 4-5 |
+| Model inheritance | Subagents inherit from main conversation — ensure Opus is set |
 | No unsafe MCPs (`safe: false`) | Phase 4 |
 | External CLI: per-run confirmation, `allowedOperations` only | Phase 4 |
 | Idempotent test data | Phase 4 |
@@ -431,7 +421,7 @@ When `swarm.audit.enabled`: append "Execution Audit" section (agent count, durat
 | Guided = happy path only | Category 1 only in guided mode — categories 2-9 autonomous-only |
 | Tool loading gate | Browser tools need pre-plan approval in autonomous mode, never in guided |
 | Plan self-containment | All context embedded in plan for post-reset survival — no "see above" references |
-| Guided = single agent | Override parallel protocol — one agent at a time in guided mode |
+| Guided = single subagent | Override parallel protocol — one foreground subagent at a time in guided mode |
 | Seed schema discovery | Before seeding any DB (main or related project): query real doc or read service code for schema. Mirror exactly — never invent fields or change types. Verify via API after seeding |
 
 ## Operational Bounds
@@ -444,7 +434,7 @@ When `swarm.audit.enabled`: append "Execution Audit" section (agent count, durat
 - **Docker**: local only, Phase 1 aborts on production. Namespaced `swarm-{N}`, original compose untouched.
 - **Credentials**: N/A — each agent seeds own data
 - **MCPs**: only `safe: true` activated
-- **Agents**: spawn → Docker → execute → teardown → shutdown. No persistent agents.
+- **Subagents**: spawn → Docker → execute → teardown → return results. No persistent agents.
 - **External CLIs**: `allowedOperations` only, per-run confirmation, blocked when `cli.blocked`. `prohibitedFlags`/`prohibitedOperations` always blocked.
 - **System commands**: `which`, `docker compose ps`/`context ls`/`system df`, `docker ps -a --filter label=`, `docker network/volume ls --filter label=`, `git branch`/`diff`/`log`, `test -f`, `find . -maxdepth 3 -name "CLAUDE.md"`, `date -u`, `ss -tlnp`/`netstat -tlnp`, `curl -sf` localhost, `python3 -c` (json/hashlib/re), `cp -al`. `setup-hook.sh` modifies settings once at install only.
 - **Downloads**: Docker images from project compose/config only. Playwright browsers if present. No other runtime downloads.
@@ -453,5 +443,5 @@ When `swarm.audit.enabled`: append "Execution Audit" section (agent count, durat
 - **Labels**: `com.autonomous-swarm.managed=true`, `.session=`, `.agent=`. Hardcoded. Secondary cleanup verification.
 - **Capabilities freeze**: setup agent snapshot → verbatim to suite agents. No re-scan.
 - **Audit**: when enabled, agents write `agent-{N}.json` to `/tmp/.../audit/`, orchestrator merges to `audit-summary.json` (all `schemaVersion: "1.0"`). Only orchestrator copies to `docs/_autonomous/`.
-- **Explore agents**: one per Phase 2. Read-only. No `team_name`.
+- **Explore agents**: one per Phase 2. Read-only.
 - **Trust**: config SHA-256 vs out-of-repo trust store. Untrusted inputs → analysis → Feature Context Document → plan → user approval via ExitPlanMode. No untrusted content in shell commands.

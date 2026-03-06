@@ -19,6 +19,7 @@ Reference file for Phase 7 documentation. Follow these structures exactly when g
 - **Capabilities**: {list of capabilities used} [omit if none]
 - **File reference**: `{path}` [omit if none]
 - **Prior history**: {count} related docs found in _autonomous/ [omit if none]
+- **Test Flow**: {autonomous/api | autonomous/ui | guided/webapp | guided/mobile}
 
 ## Summary
 
@@ -35,6 +36,8 @@ Reference file for Phase 7 documentation. Follow these structures exactly when g
 |---------|-------------|----------|--------|--------|
 | 1.1 | {what was tested} | {expected outcome} | {actual outcome} | PASS |
 | 1.2 | {what was tested} | {expected outcome} | {actual outcome} | **FAIL** |
+
+**Related Project Logs**: {clean | errors found — see details below}
 
 ---
 
@@ -176,6 +179,12 @@ These tests require browser interaction, visual verification, or real user actio
 | External Service Mode | {Sandbox/Test} |
 | Test User | `${TEST_USER_EMAIL}` / `${TEST_USER_PASSWORD}` (env var references — never raw credentials) |
 | Test Data | `{relevant test identifiers}` |
+
+### Mobile Test Notes (guided/mobile only)
+
+- **Target Device**: {Physical Android / Physical iOS}
+- **App Build**: {instructions to install/update the app on device}
+- **Verification**: {commands to verify mobile actions via API/DB — user performs actions on physical device}
 ```
 
 **Rules**: `---` between every test. Number sequentially (`## Test 1:`, `## Test 2:`). `**Purpose**:` as bold paragraph, not a heading. `### Steps` with numbered list including specific URLs/credentials. `### Verification (Claude checks)` with fenced bash + `# comment` lines. `### Expected` with bullet list. Include `### Prerequisites` and `### Notes` only when they add value. Always end with `## Environment Info` table. Never expose real credentials.

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # setup-hook.sh — Configure Claude Code settings for the autonomous-tests skill.
 #
-# Installs four things into ~/.claude/settings.json:
+# Installs three things into ~/.claude/settings.json:
 #   1. ExitPlanMode approval hook (forces plan approval even in dontAsk mode)
 #   2. AskUserQuestion hook (forces user prompt even in dontAsk/bypass mode)
-#   3. CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS env flag (enables agent teams)
-#   4. Model set to claude-opus-4-6 (required for agent team reasoning)
+#   3. Model set to claude-opus-4-6 (required for subagent reasoning)
 #
 # The autonomous-tests skill already includes both hooks as skill-scoped hooks,
 # so this script is only needed if you want the behavior globally.
@@ -106,15 +105,7 @@ else:
     settings["hooks"]["PreToolUse"].append(ASK_USER_HOOK)
     changes.append("AskUserQuestion hook")
 
-# 3. Ensure agent teams feature flag is enabled
-settings.setdefault("env", {})
-if settings["env"].get("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS") == "1":
-    print("\033[0;32mAgent teams already enabled.\033[0m")
-else:
-    settings["env"]["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
-    changes.append("agent teams feature flag")
-
-# 4. Ensure model is set to Opus 4.6
+# 3. Ensure model is set to Opus 4.6
 if settings.get("model") == "claude-opus-4-6":
     print("\033[0;32mModel already set to claude-opus-4-6.\033[0m")
 else:
@@ -149,7 +140,6 @@ echo ""
 echo "What was configured:"
 echo "  - ExitPlanMode hook: ensures plan approval is always required, even in dontAsk mode"
 echo "  - AskUserQuestion hook: ensures user prompts are always shown, even in dontAsk/bypass mode"
-echo "  - Agent teams: enables CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS for agent team orchestration"
-echo "  - Model: claude-opus-4-6 (required for agent team reasoning capabilities)"
+echo "  - Model: claude-opus-4-6 (required for subagent reasoning capabilities)"
 echo ""
 echo "To undo, edit $SETTINGS_FILE manually or restore from ${SETTINGS_FILE}.bak"

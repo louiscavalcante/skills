@@ -26,7 +26,7 @@
       "relationship": "webapp | mobile | api | worker | shared-lib | docs",
       "startCommand": "npm run dev | null",
       "healthCheck": "curl -sf http://localhost:3000 | null",
-      "logCommand": "null",
+      "logCommand": "docker logs -f container-name | command to view logs for this related project | null",
       "testCommand": "npm test | null",
       "gitTracked": true
     }
