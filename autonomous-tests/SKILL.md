@@ -292,12 +292,14 @@ If eligibility list is empty AND `guided` arg present → skip prompt entirely.
 10. If guided happy path approved: Guided Happy Path Decision block — per-test: name, objective, prerequisites, step-by-step user instructions, DB seed commands, verification queries, expected outcomes.
 11. Documentation checklist (always embedded, never conditional) — the post-reset orchestrator needs this to know what files to generate after testing. Include: output directories from config (`documentation.*` paths), template reference path (`references/templates.md`), filename convention (`{timestamp}_{semantic-name}.md`, timestamp from `date -u`), and which doc types this run produces. At minimum: test-results doc. Conditionally: pending-fixes (if failures/findings exist), pending-guided-tests (if guided tests identified or approved), pending-autonomous-tests (if tests queued but not run). Without this embedded checklist, the orchestrator has no way to know about doc generation after context reset — which is why it gets skipped.
 12. Tool Inventory from Phase 0 — full inventory with per-phase recommendations so subagents know which tools are available without re-scanning.
+13. DB Consistency Check Protocol from `references/db-consistency-protocol.md` — embedded verbatim so agents execute inline checks without needing the reference file post-reset.
 
 - Execution Protocol — autonomous mode (embed verbatim — orchestrator uses this after context reset):
   ```
   SERVICE RESTORATION: Spawn general-purpose subagent (foreground). Re-verify all services from Service Readiness Report using healthCheck from config. Unhealthy → restart via startCommand + poll 5s/30s. Start webhook listeners. STOP if any service unreachable. Returns updated Service Readiness Report.
   SETUP: Spawn general-purpose subagent (foreground). Reads source files, compiles Feature Context Document, returns results.
   TOOL CONTEXT: Suite agents receive relevant Tool Inventory subset (service MCPs, CLI fallbacks, browser tools, DB tools) in their prompts.
+  DB CONSISTENCY: Agents capture dbBaseline before first seed. Execute POST_SEED after seeding, POST_TEST after test execution, POST_CLEANUP after cleanup. Report results with suite PASS/FAIL. Protocol embedded in plan from references/db-consistency-protocol.md.
   FLOW: STRICTLY SEQUENTIAL — one subagent at a time:
     1. For each suite (in order):
        a. Spawn ONE general-purpose subagent (foreground)
@@ -453,6 +455,8 @@ Spawn `general-purpose` subagents sequentially (foreground). Each subagent recei
 
 **Anomaly detection** — agents watch for: duplicate records, unexpected DB changes, warning/error logs, slow queries/missing indexes, orphaned references, auth token anomalies, unexpected response fields/status codes.
 
+**DB consistency checks** — agents execute inline checks per embedded DB Consistency Check Protocol: POST_SEED (after seeding), POST_TEST (after execution), POST_CLEANUP (after cleanup). Each produces a structured result (PASS/WARN/FAIL) reported alongside suite PASS/FAIL. Baseline captured before first DB modification.
+
 **Finding verification** (mandatory): Before reporting any finding: (1) identify source code, (2) read to confirm real behavior vs test artifacts, (3) distinguish real vs agent-created, (4) report only confirmed. Unconfirmed → `Severity: Unverified` in `### Unverified` subsection.
 
 **API Response Security Inspection** — analyze ALL responses for:
@@ -468,7 +472,7 @@ Verify against source: read model/serializer/DTO to confirm field exists in real
    - **Seed schema analysis gate** (MANDATORY — before ANY database write): The plan MUST embed the seed schema discovery protocol. Agents must complete schema analysis and report discovered schemas BEFORE executing any insert/seed operation. Proceeding without schema analysis is PROHIBITED.
    - **Seed schema discovery** (mandatory for autonomous seeding — applies to ALL databases in the E2E flow, including related projects): Before inserting into ANY collection/table: (1) query for a real document/row (`findOne`/`SELECT * LIMIT 1` without test prefix filter) to use as schema template, (2) if empty, read the backend service code that creates documents in that collection (look for `insertOne`/`find_one_and_update`/`INSERT`/ORM create calls), (3) mirror the discovered schema exactly — never invent fields or change types (ObjectId vs string, Date vs string, etc.), (4) only add `_testPrefix` marker as extra field, (5) for related project collections: use the connection command from `relatedProjects[]` config or the cross-project seed map in the Feature Context Document. After all seeds (main + related): hit the API read endpoints to verify serialization before proceeding.
    - Verification: `connectionCommand` for queries
-   - Post-test: `cleanupCommand` or clean `testDataPrefix` data. Order: migrate → seed → test → cleanup.
+   - Post-test: `cleanupCommand` or clean `testDataPrefix` data. Order: migrate → capture dbBaseline → seed → POST_SEED check → test → POST_TEST check → cleanup → POST_CLEANUP check.
    - Browser: include workflow + priority chain. "Do NOT skip browser suites."
 2. Strictly sequential:
    ```
@@ -501,7 +505,7 @@ Verify against source: read model/serializer/DTO to confirm field exists in real
 
 **Fix cycle**: Runtime-fixable (env/container/stuck job) → before attempting any fix, verify the issue is real: re-read error output, check if the failure is transient (retry once), confirm root cause in logs/config. Only proceed with a fix after confirming the issue genuinely requires intervention. Spawn general-purpose subagent (foreground) to fix → re-run suite → max 3 cycles. Code bug → document (file, line, expected vs actual) → ask user.
 
-**Documentation**: Spawn general-purpose subagent (foreground). Timestamp via `date -u +"%Y-%m-%d-%H-%M-%S"`. Pattern: `{timestamp}_{semantic-name}.md`. Read `references/templates.md` first. Four doc types: test-results (always generated — the record is essential for regression tracking even when all tests pass), pending-fixes (bugs/infra issues), pending-guided-tests (browser/visual/physical + guided happy-path tests if approved), pending-autonomous-tests (identified but not run). Re-runs → append "Re-run" section. If live E2E or guided happy-path tests were executed, include their results in the test-results doc under dedicated suite sections. The documentation subagent receives all test results (autonomous + live E2E + guided) and generates unified output.
+**Documentation**: Spawn general-purpose subagent (foreground). Timestamp via `date -u +"%Y-%m-%d-%H-%M-%S"`. Pattern: `{timestamp}_{semantic-name}.md`. Read `references/templates.md` first. Four doc types: test-results (always generated — the record is essential for regression tracking even when all tests pass), pending-fixes (bugs/infra issues), pending-guided-tests (browser/visual/physical + guided happy-path tests if approved), pending-autonomous-tests (identified but not run). Re-runs → append "Re-run" section. If live E2E or guided happy-path tests were executed, include their results in the test-results doc under dedicated suite sections. The documentation subagent receives all test results (autonomous + live E2E + guided) and generates unified output. If any DB consistency check returned WARN or FAIL, include `### DB Consistency` subsection in test-results per the template.
 
 **Cleanup**: Spawn general-purpose subagent (foreground). Remove `testDataPrefix` data only. Never touch pre-existing. Log actions. Verify with DB query.
 
@@ -541,6 +545,7 @@ Verify against source: read model/serializer/DTO to confirm field exists in real
 | Guided happy path = post-all | Guided happy-path runs last — after autonomous and live E2E |
 | Post-discovery prompts | Standard mode only — skipped when `guided` arg or regression mode active |
 | Documentation in every run | Test-results doc generated for every run. Embedded in plan execution protocol so it survives context reset |
+| DB consistency inline | POST_SEED, POST_TEST, POST_CLEANUP checks within Phase 4 per suite. Baseline before first DB write. Results in test-results |
 
 ## Operational Bounds
 

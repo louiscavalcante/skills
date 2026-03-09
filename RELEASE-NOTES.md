@@ -1,5 +1,10 @@
 # Release Notes
 
+## v2.3.0
+
+### Added
+- **Inline DB consistency checks** (all 3 skills): Verification now runs within each database-modifying phase while data is present (POST_SEED, POST_TEST, POST_CLEANUP for test skills; POST_FIX for fixes), replacing the standalone post-cleanup check that trivially passed against an empty database. Agents capture a `dbBaseline` before first DB write and verify record counts, schema conformance, referential integrity, orphans, mutations, and cleanup completeness at each check point. Results (PASS/WARN/FAIL) reported alongside suite PASS/FAIL and included in test-results/fix-results documentation. Protocol defined once in `autonomous-tests/references/db-consistency-protocol.md` and referenced by all three skills via self-containment mandate.
+
 ## v2.2.0 (2026-03-09)
 
 ### Added

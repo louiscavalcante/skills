@@ -39,6 +39,8 @@ Reference file for Phase 5 documentation. Follow these structures exactly when g
 
 **Verification details**: {how the fix was verified}
 
+**DB consistency**: {PASS — no unintended side effects | WARN: {detail} | FAIL: {detail} | N/A — non-DB fix}
+
 ---
 
 ## Next Steps
@@ -103,4 +105,4 @@ For every V-prefix item, include a `### Security Impact` subsection in the fix-r
 | Residual Risk | {none / description} |
 ```
 
-**Rules**: Always include for V-prefix items. The `### Security Impact` subsection appears after `**Verification details**` and before the `---` separator. `Related Patterns Checked` must reflect actual verification — list how many files/endpoints were scanned for the same vulnerability pattern.
+**Rules**: Always include for V-prefix items. The `### Security Impact` subsection appears after `**DB consistency**` and before the `---` separator. `Related Patterns Checked` must reflect actual verification — list how many files/endpoints were scanned for the same vulnerability pattern.

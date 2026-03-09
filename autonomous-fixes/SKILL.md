@@ -133,11 +133,13 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
 5. Config paths: `documentation.fixResults`, `documentation.pendingFixes`, `documentation.testResults`, `database.connectionCommand`, `testing.unitTestCommand`
 6. CLAUDE.md file list from Phase 0 Step 2
 7. Tool Inventory from Phase 0 — full inventory with per-phase recommendations so fix agents know which tools are available without re-scanning.
+8. DB Consistency Check Protocol (POST_FIX section only) from `autonomous-tests/references/db-consistency-protocol.md` — embedded verbatim so fix agents execute inline checks without needing the reference file post-reset.
 
 - Execution Protocol (embed verbatim — orchestrator uses this after context reset):
   ```
   SETUP: Spawn general-purpose subagent (foreground). Reads source files referenced by findings, compiles Fix Context Documents, reads CLAUDE.md files, returns results.
   TOOL CONTEXT: Fix agents receive relevant Tool Inventory subset (service MCPs, CLI tools, DB tools, testing tools) in their prompts.
+  DB CONSISTENCY: Fix agents that modify DB-interacting code capture pre-fix record counts, then run POST_FIX check after fix application. Non-DB fixes skip this step.
   FLOW: STRICTLY SEQUENTIAL — one subagent at a time:
     1. For each selected item (in order):
        a. Spawn ONE general-purpose subagent (foreground)
@@ -152,7 +154,8 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
   ```
   ## Post-Fix Checklist
   1. [ ] 4a: Verification agent confirms tests pass
-  2. [ ] 4b: Fix-results doc created at `documentation.fixResults`
+  2. [ ] 4a: DB consistency POST_FIX check passed (if applicable)
+  3. [ ] 4b: Fix-results doc created at `documentation.fixResults`
   3. [ ] 4b: Resolution blocks appended to pending-fixes
   4. [ ] 4b: Test-results updated for T-prefix items (if applicable)
   5. [ ] 4c: Loop signal printed
@@ -193,8 +196,9 @@ Spawn general-purpose subagents sequentially (foreground). For each selected ite
 3. Implement fix targeting root cause
 4. Run unit tests if configured (`testing.unitTestCommand`)
 5. Verify with targeted checks (API calls, DB queries, log inspection)
-6. Report: RESOLVED / PARTIAL / UNABLE with details
-5. Record `Original Test IDs` from source finding's `Test ID` field into fix-results documentation
+6. **DB consistency: POST_FIX** — if fix touched DB-interacting code, capture pre-fix record counts, apply fix, then verify no unintended writes, schema intact, no orphans introduced. Skip for non-DB fixes.
+7. Report: RESOLVED / PARTIAL / UNABLE with details
+8. Record `Original Test IDs` from source finding's `Test ID` field into fix-results documentation
 
 **V-prefix additional instructions**:
 1. Enforce DTO/serializer filtering — remove sensitive data from responses
@@ -218,7 +222,7 @@ Verify fixes, generate documentation, offer source cleanup.
 
 Delegate to agents.
 
-**Standard**: confirm modified files, run unit tests, re-execute failing scenario.
+**Standard**: confirm modified files, run unit tests, re-execute failing scenario. If fix modified DB-interacting code, verify POST_FIX check passed. Include result in fix-results.
 
 **V-prefix**: re-test original attack vector (must block), test variant payloads, verify no auth bypass/privilege escalation, verify hardened error responses, verify sensitive data removal, check rate limiting.
 

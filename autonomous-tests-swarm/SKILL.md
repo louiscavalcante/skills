@@ -314,12 +314,14 @@ If eligibility list is empty AND `guided` arg present → skip prompt entirely.
 10. If guided happy path approved: Guided Happy Path Decision block — per-test: name, objective, prerequisites, step-by-step user instructions, DB seed commands, verification queries, expected outcomes.
 11. Documentation checklist (always embedded, never conditional) — the post-reset orchestrator needs this to know what files to generate after testing. Include: output directories from config (`documentation.*` paths), template reference path (`references/templates.md`), filename convention (`{timestamp}_{semantic-name}.md`, timestamp from `date -u`), and which doc types this run produces. At minimum: test-results doc. Conditionally: pending-fixes (if failures/findings exist), pending-guided-tests (if guided tests identified or approved), pending-autonomous-tests (if tests queued but not run). Without this embedded checklist, the orchestrator has no way to know about doc generation after context reset — which is why it gets skipped.
 12. Tool Inventory from Phase 0 — full inventory with per-phase recommendations so subagents know which tools are available without re-scanning.
+13. DB Consistency Check Protocol from `autonomous-tests/references/db-consistency-protocol.md` — embedded verbatim so agents execute inline checks without needing the reference file post-reset.
 
 - Execution Protocol — autonomous mode (embed verbatim — orchestrator uses this after context reset):
   ```
   SETUP: Spawn general-purpose subagent (foreground). Creates agent dirs, generates modified compose/docker scripts with remapped ports, copies+remaps env files, validates configs, freezes capabilities snapshot, applies resource limits + Docker labels, reads source files, returns specs.
   TOOL CONTEXT: Suite agents receive relevant Tool Inventory subset (service MCPs, CLI fallbacks, browser tools, DB tools) in their prompts.
   SCHEMA GATE: Every suite agent MUST complete seed schema discovery (query real doc or read service code) BEFORE any database write. Proceeding without schema analysis is PROHIBITED.
+  DB CONSISTENCY: Per-agent inline checks. Each agent captures dbBaseline before seeding, runs POST_SEED/POST_TEST/POST_CLEANUP against its namespaced DB. Results returned with suite PASS/FAIL. Protocol embedded in plan.
   FLOW: PARALLEL — background subagents:
     1. Set Docker context
     2. Confirm port ranges
@@ -483,11 +485,13 @@ Orchestrator receives setup results, then spawns suite subagents with pre-genera
 - **e. npm-dev setup**: `rsync` project (exclude node_modules/.next/dist/.turbo), set up node_modules, resolve env overrides (`{port}`/`{backendPort}`), start in background (capture PID), remap env files
 - **f. Health check**: poll remapped ports, 60s timeout, 2 attempts → report failure for redistribution
 - **g. Init**: run `swarm.initialization.commands` with namespace resolution. Wait `waitAfterStartSeconds`. Related project init.
-- **h. DB seeding**: adapted `migrationCommand`, `seedCommand`, `connectionCommand`, `cleanupCommand` with `swarm-{N}` namespace. **Seed schema analysis gate** (MANDATORY — before ANY database write): Agents must complete schema analysis and report discovered schemas BEFORE executing any insert/seed operation. Proceeding without schema analysis is PROHIBITED. **Seed schema discovery** (mandatory for autonomous seeding — applies to ALL databases in the E2E flow, including related projects): Before inserting into ANY collection/table: (1) query for a real document/row (`findOne`/`SELECT * LIMIT 1` without test prefix filter) to use as schema template, (2) if empty, read the backend service code that creates documents in that collection (look for `insertOne`/`find_one_and_update`/`INSERT`/ORM create calls), (3) mirror the discovered schema exactly — never invent fields or change types (ObjectId vs string, Date vs string, etc.), (4) only add `_testPrefix` marker as extra field, (5) for related project collections: use the connection command from `relatedProjects[]` config or the cross-project seed map in the Feature Context Document. After all seeds (main + related): hit the API read endpoints (via the agent's remapped ports) to verify serialization before proceeding to test execution.
+- **h. DB seeding**: adapted `migrationCommand`, `seedCommand`, `connectionCommand`, `cleanupCommand` with `swarm-{N}` namespace. Capture `dbBaseline` via `connectionCommand` before seeding. **Seed schema analysis gate** (MANDATORY — before ANY database write): Agents must complete schema analysis and report discovered schemas BEFORE executing any insert/seed operation. Proceeding without schema analysis is PROHIBITED. **Seed schema discovery** (mandatory for autonomous seeding — applies to ALL databases in the E2E flow, including related projects): Before inserting into ANY collection/table: (1) query for a real document/row (`findOne`/`SELECT * LIMIT 1` without test prefix filter) to use as schema template, (2) if empty, read the backend service code that creates documents in that collection (look for `insertOne`/`find_one_and_update`/`INSERT`/ORM create calls), (3) mirror the discovered schema exactly — never invent fields or change types (ObjectId vs string, Date vs string, etc.), (4) only add `_testPrefix` marker as extra field, (5) for related project collections: use the connection command from `relatedProjects[]` config or the cross-project seed map in the Feature Context Document. After all seeds (main + related): hit the API read endpoints (via the agent's remapped ports) to verify serialization before proceeding to test execution.
+- **h2. DB consistency: POST_SEED** — execute POST_SEED checks against agent's namespaced DB. Compare current counts to `dbBaseline` + expected seed counts.
 - **i. Execute**: test suites against agent's API (remapped ports)
+- **i2. DB consistency: POST_TEST** — execute POST_TEST checks against agent's namespaced DB. Compare against `dbBaseline` for mutation audit.
 - **j. Report**: PASS/FAIL + anomalies returned to orchestrator
 - **k. Audit** (when enabled): `agent-{N}.json` → `schemaVersion: "1.0"`, agentId, suites, environment, timeline (`{ timestamp, action, target, result }`), configuredLimits (no `docker stats`), teardown status, duration
-- **l. Teardown (ALWAYS)**: compose `down -v --remove-orphans` / raw docker stop+rm+network rm / npm-dev kill PIDs / remove agent temp dir / verify no lingering containers
+- **l. Teardown (ALWAYS)**: (1) Remove `testDataPrefix` data, (2) DB consistency: POST_CLEANUP — execute POST_CLEANUP checks (cleanup completeness, pre-existing preservation, structural integrity), (3) compose `down -v --remove-orphans` / raw docker stop+rm+network rm / npm-dev kill PIDs / remove agent temp dir / verify no lingering containers
 
 **Execution flow**:
 1. Set Docker context
@@ -525,7 +529,7 @@ Orchestrator receives setup results, then spawns suite subagents with pre-genera
 ### Documentation
 Delegate to agent. Dirs from config. Timestamp via `date -u +"%Y-%m-%d-%H-%M-%S"`. Pattern: `{timestamp}_{semantic-name}.md`. Read `autonomous-tests/references/templates.md` for structure.
 
-Doc types: **test-results** (always generated — the record is essential for regression tracking even when all tests pass), **pending-fixes** (bugs/infra), **pending-guided-tests** (browser/visual/device + guided happy-path tests if approved), **pending-autonomous-tests** (identified but not run). If live E2E or guided happy-path tests were executed, include their results in the test-results doc under dedicated suite sections. The documentation subagent receives all test results (autonomous + live E2E + guided) and generates unified output.
+Doc types: **test-results** (always generated — the record is essential for regression tracking even when all tests pass), **pending-fixes** (bugs/infra), **pending-guided-tests** (browser/visual/device + guided happy-path tests if approved), **pending-autonomous-tests** (identified but not run). If live E2E or guided happy-path tests were executed, include their results in the test-results doc under dedicated suite sections. The documentation subagent receives all test results (autonomous + live E2E + guided) and generates unified output. If any DB consistency check returned WARN or FAIL, include `### DB Consistency` subsection in test-results with per-agent results per the template.
 
 When `swarm.audit.enabled`: append "Execution Audit" section (agent count, durations, limits, totals, cleanup, audit JSON path). Only orchestrator copies `audit-summary.json` to `docs/_autonomous/test-results/`. Re-runs: append "Re-run" section.
 
@@ -581,6 +585,7 @@ When `swarm.audit.enabled`: append "Execution Audit" section (agent count, durat
 | Guided happy path = post-all | Guided happy-path runs last — after autonomous and live E2E |
 | Post-discovery prompts | Standard mode only — skipped when `guided` arg or regression mode active |
 | Documentation in every run | Test-results doc generated for every run. Embedded in plan execution protocol so it survives context reset |
+| DB consistency inline | POST_SEED, POST_TEST, POST_CLEANUP checks within Phase 4 per agent. Baseline before first DB write. Results in test-results |
 
 ## Operational Bounds
 

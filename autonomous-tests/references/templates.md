@@ -77,6 +77,14 @@ Reference file for Phase 7 documentation. Follow these structures exactly when g
 |----------|---------|----------|----------|------------|
 | `{path}` | {what was exposed} | {Data Leak / ID Exposure / Secret Leak} | {severity} | {LGPD/GDPR/etc.} |
 
+### DB Consistency
+
+| Suite | Check Point | Checks Passed | Status | Details |
+|-------|-------------|---------------|--------|---------|
+| {Suite Name} | POST_SEED | {N}/{N} | PASS | — |
+| {Suite Name} | POST_TEST | {N}/{N} | WARN | {detail} |
+| {Suite Name} | POST_CLEANUP | {N}/{N} | PASS | — |
+
 ### Needs Guided Testing
 
 - {What needs manual testing and why}
