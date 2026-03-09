@@ -1,5 +1,23 @@
 # Release Notes
 
+## v2.1.0 (2026-03-09)
+
+### Added
+- **Live E2E testing prompt** (autonomous-tests + swarm): When external service CLIs/MCPs are available and relevant to the tested code, offers sandbox live E2E testing after autonomous suites. Phase 2 cross-references the feature map with detected capabilities to build an eligibility list, then prompts the user before plan mode. Live E2E runs sequentially after all mocked autonomous suites, with per-service CLI gate and runtime sandbox re-verification.
+- **Guided happy-path prompt** (autonomous-tests + swarm): Offers manual testing opt-in during standard mode runs. User performs actions on device/browser while Claude verifies via DB/API/logs. Runs last — after autonomous and live E2E suites. Skipped when `guided` arg or regression mode is active.
+- **Post-discovery prompts** (autonomous-tests + swarm Phase 2): Single `AskUserQuestion` after Feature Context Document compilation presents both live E2E and guided happy-path options. Standard mode only — skipped for `guided` arg or regression mode.
+- **Live E2E eligibility analysis** (autonomous-tests + swarm Phase 2): Orchestrator cross-references feature map external service usage with `externalServices[]` capabilities to classify services as eligible, blocked, or unavailable.
+- **Execution protocols for live E2E, guided happy path, and documentation** (autonomous-tests + swarm Phase 3): Three new protocol blocks embedded in plans — survive context reset and provide post-reset orchestrator with complete execution instructions.
+- **Self-containment items 9-11** (autonomous-tests + swarm Phase 3): Plans now embed Live E2E Decision block (item 9), Guided Happy Path Decision block (item 10), and Documentation checklist (item 11) for post-reset survival.
+- **Rules and operational bounds** (autonomous-tests + swarm): New entries for live E2E scope, guided happy path scope, post-discovery prompts, and documentation output requirements.
+
+### Fixed
+- **Documentation generation after context reset** (autonomous-tests + swarm): Added `DOCUMENTATION` as an explicit step in the autonomous execution protocol block. Previously, the protocol ended at `AUDIT` — after context reset, the orchestrator followed the protocol verbatim and never generated docs because Phase 5 instructions in the SKILL.md were no longer in context. The documentation protocol block is now always embedded in every plan, ensuring test-results docs are generated for every run.
+
+### Changed
+- **Phase 5 documentation paragraph** (autonomous-tests + swarm): Updated to clarify test-results docs are always generated (even on all-pass), and live E2E / guided happy-path results are included under dedicated suite sections in unified output.
+- **Phase 4 execution flow** (autonomous-tests + swarm): Added numbered steps for live E2E suites and guided happy-path tests after autonomous suite execution.
+
 ## v2.0.1 (2026-03-06)
 
 ### Fixed

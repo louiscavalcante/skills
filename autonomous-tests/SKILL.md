@@ -204,6 +204,49 @@ Compile **Targeted Regression Context Document** (replaces Feature Context Docum
 ### Feature Context Document (standard/guided modes — skipped in regression mode)
 Compile from Explore report (do NOT re-read files). Contents: features, endpoints, DB collections/tables, cross-project seed map (related project DB dependencies with collection/table, required fields, connection commands), test flow classifications, related project log commands, external services, edge cases, test history, file reference content, capabilities. Guided mode adds `Mode` + `Source` at top. Cascaded to every Phase 4 agent.
 
+### Live E2E Eligibility Analysis (standard mode only — skip in guided and regression)
+
+After the Feature Context Document is compiled, the orchestrator cross-references features with capabilities to determine which external services are both available and relevant to the code being tested:
+
+1. **Extract external service usage from feature map**: Collect all external services referenced by the changed code (webhook handlers, API calls, storage operations). Each entry: service name, operations used, code paths.
+2. **Cross-reference with capabilities**: For each service in the feature map, check `externalServices[]` in config:
+   - `cli.available && !cli.blocked` → **eligible** (available in sandbox)
+   - `cli.available && cli.blocked` → **blocked** (production keys detected)
+   - `!cli.available` → **unavailable** (CLI not installed)
+   - Also check `capabilities.dockerMcps[]` for relevant sandbox MCPs
+3. **Compile eligibility list**: Per eligible service: name, mode, relevant `allowedOperations` matching the feature map, applicable MCP tools. Only services that are both available and relevant to the changed code appear.
+4. **Store**: `liveE2eEligibility: { eligible: [...], blocked: [...], unavailable: [...] }` — carried to prompts and Phase 3.
+
+### Post-Discovery Prompts (standard mode only — skip if `guided` arg present or regression mode)
+
+After Feature Context Document and Live E2E Eligibility Analysis, prompt the user before entering plan mode. Use a single `AskUserQuestion` to reduce friction:
+
+```
+Based on the discovered features, I have two optional additions:
+
+{IF liveE2eEligibility.eligible is non-empty}
+1. **Live E2E Testing** — The changed code interacts with external services available in sandbox mode:
+{for each eligible service}
+   - {service.name} ({service.mode}): {comma-separated relevant allowedOperations[].command}
+{end for}
+   These run after the standard autonomous tests, using real CLI/MCP calls. Each service requires your approval again at runtime before any CLI call.
+   → Include live E2E suites? (yes/no)
+{ELSE}
+1. **Live E2E Testing** — No external services are both available and relevant to the changed code. Skipping.
+{END IF}
+
+2. **Guided Happy Path** — After all autonomous tests, I can generate a guided test plan where you perform actions on your device/browser while I verify results via DB/API/logs. Happy-path workflows only.
+   → Include guided happy-path section? (yes/no)
+
+Reply with your choices (e.g., "yes to both", "live e2e yes, guided no", "no to both").
+```
+
+Parse response into two boolean decisions:
+- `liveE2eApproved` (forced `false` if eligibility list was empty)
+- `guidedHappyPathApproved`
+
+If eligibility list is empty AND `guided` arg present → skip prompt entirely.
+
 ## Phase 3 — Plan (Plan Mode)
 
 **Enter plan mode (/plan).** Plan starts with:
@@ -216,6 +259,8 @@ Compile from Explore report (do NOT re-read files). Contents: features, endpoint
 - Service Readiness Report from Phase 1 (Phase 3 agents MUST NOT start services or re-check health — service restoration occurs at Phase 4 start)
 - If regression mode: fix manifest, 1-hop impact zone, original test IDs, Targeted Regression Context Document
 - If guided: type, source, and full guided test list with per-test seed requirements
+- If live E2E approved: eligibility list (per-service: name, mode, relevant operations, MCP tools), user approval status
+- If guided happy path approved: list of happy-path workflows from Feature Context Document with per-test seed requirements, user instructions, verification queries
 
 **Tool loading gate**: If autonomous mode needs agent-browser/Playwright, list tools and prompt user via AskUserQuestion before plan approval. Declined tools excluded from plan. Guided mode: NEVER include browser automation tools — skip this gate entirely.
 
@@ -228,6 +273,9 @@ Compile from Explore report (do NOT re-read files). Contents: features, endpoint
 6. Credential role names from `testCredentials`
 7. If guided: per-test DB seed commands, user-facing step-by-step instructions, and verification queries
 8. Seed schema discovery mandate (embedded verbatim for Phase 4 agents)
+9. If live E2E approved: Live E2E Decision block — per-service: name, mode, relevant `allowedOperations`, applicable MCP tools, `userPromptTemplate` for runtime CLI gate. Embedded verbatim so post-reset orchestrator can prompt and execute.
+10. If guided happy path approved: Guided Happy Path Decision block — per-test: name, objective, prerequisites, step-by-step user instructions, DB seed commands, verification queries, expected outcomes.
+11. Documentation checklist (always embedded, never conditional) — the post-reset orchestrator needs this to know what files to generate after testing. Include: output directories from config (`documentation.*` paths), template reference path (`references/templates.md`), filename convention (`{timestamp}_{semantic-name}.md`, timestamp from `date -u`), and which doc types this run produces. At minimum: test-results doc. Conditionally: pending-fixes (if failures/findings exist), pending-guided-tests (if guided tests identified or approved), pending-autonomous-tests (if tests queued but not run). Without this embedded checklist, the orchestrator has no way to know about doc generation after context reset — which is why it gets skipped.
 
 - Execution Protocol — autonomous mode (embed verbatim — orchestrator uses this after context reset):
   ```
@@ -241,6 +289,9 @@ Compile from Explore report (do NOT re-read files). Contents: features, endpoint
        d. Receive results directly
        e. Record PASS/FAIL
        f. Next suite
+  LIVE E2E (conditional): Execute if plan contains liveE2eApproved: true. Follow live E2E execution protocol.
+  GUIDED HAPPY PATH (conditional): Execute if plan contains guidedHappyPathApproved: true. Follow guided happy path execution protocol.
+  DOCUMENTATION: Follow documentation execution protocol. Generate all applicable doc types from the embedded documentation checklist. This step runs even if all tests passed — the test-results record is needed for regression tracking.
   PROHIBITED: multiple concurrent subagents, parallel execution, main-conversation execution
   AUDIT: agents spawned count, suites executed, cleanup status
   ```
@@ -259,6 +310,52 @@ Compile from Explore report (do NOT re-read files). Contents: features, endpoint
     5. Orchestrator verifies results via DB queries/API/logs
     6. Record PASS/FAIL → next test
   PROHIBITED: agent-browser, Playwright, security/edge-case/validation tests
+  ```
+
+- Execution Protocol — live E2E mode (embed verbatim — conditional, only if liveE2eApproved):
+  ```
+  RUNS AFTER: All autonomous (mocked) suites complete. Live E2E tests real external services in sandbox — running them first would risk polluting the mocked test environment.
+  SERVICES: {embedded per-service details from Live E2E Decision block}
+  FLOW: Sequential — one subagent at a time:
+    1. For each live E2E suite:
+       a. CLI gate: AskUserQuestion per service using embedded userPromptTemplate (once per service, not per suite)
+       b. Declined → skip that service's suites, mark "skipped — user declined at runtime"
+       c. Approved → cli.approvedThisRun: true
+       d. Sandbox check: agent re-runs modeDetection.command before first CLI call. If production detected → abort live E2E for that service (keys may have changed since Phase 0).
+       e. Spawn ONE general-purpose subagent (foreground) with full context + CLI details + allowed/prohibited operations
+       f. Record PASS/FAIL → next suite
+  ```
+
+- Execution Protocol — guided happy path mode (embed verbatim — conditional, only if guidedHappyPathApproved):
+  ```
+  RUNS AFTER: All autonomous suites AND live E2E suites (if any). Guided runs last because it requires the user's active participation — pausing autonomous work mid-flow would be disruptive.
+  NO BROWSER AUTOMATION: The user performs all actions. agent-browser and Playwright are not loaded.
+  CATEGORIES: Happy-path workflows only (category 1). Edge cases, security, and validation are autonomous-only — they don't benefit from manual execution.
+  FLOW: For each guided test:
+    1. Spawn ONE general-purpose subagent (foreground) for DB seeding + service setup
+    2. Subagent seeds database (seed schema discovery mandate), returns readiness
+    3. Orchestrator presents steps to user via AskUserQuestion
+    4. User performs actions on real device/browser
+    5. Orchestrator spawns verification subagent — DB/API/log checks
+    6. Record PASS/FAIL → next test
+  ```
+
+- Execution Protocol — documentation (embed verbatim — always present, never conditional):
+  ```
+  RUNS AFTER: All test phases (autonomous + live E2E + guided) complete.
+  WHY THIS EXISTS IN THE PLAN: After context reset, Phase 5 instructions in the SKILL.md are no longer in context. Without this block, the orchestrator completes suites and stops — no docs get written. This block ensures doc generation happens.
+  WHAT TO GENERATE:
+    - test-results doc (always — even if every test passed, the record matters for regression tracking and audit trails)
+    - pending-fixes doc (when any test failed or findings were reported)
+    - pending-guided-tests doc (when guided tests were identified or guidedHappyPathApproved)
+    - pending-autonomous-tests doc (when tests were identified but not executed)
+  HOW:
+    1. Spawn general-purpose subagent (foreground)
+    2. Read references/templates.md for structure
+    3. Get timestamp: date -u +"%Y-%m-%d-%H-%M-%S"
+    4. Filename: {timestamp}_{semantic-name}.md
+    5. Write to directories from the documentation checklist embedded in this plan
+    6. Include ALL results: autonomous + live E2E (if run) + guided (if run)
   ```
 
 **Test categories** — standard (autonomous): all 9. Guided mode (both sub-modes): category 1 ONLY. Categories 2-9 never in guided. Non-happy-path findings queued as pending-autonomous-tests.
@@ -346,7 +443,17 @@ Verify against source: read model/serializer/DTO to confirm field exists in real
    ```
    Prohibited: multiple concurrent subagents, parallel execution, main-conversation execution.
 3. PASS/FAIL + anomalies after each suite
-4. **Audit summary**: agents spawned, suites executed, docker exec count, cleanup status
+4. **Live E2E suites (conditional — only if plan contains liveE2eApproved: true)**:
+   - Runs after all autonomous suites complete and results are recorded
+   - CLI gate: per service, AskUserQuestion using embedded userPromptTemplate. Declined → skip. Approved → cli.approvedThisRun: true.
+   - Sandbox re-verification before first CLI call. Production detected → abort for that service.
+   - Sequential: one foreground subagent per suite, full context including CLI details and allowed/prohibited operations
+   - Record PASS/FAIL, check related project logs
+5. **Guided happy-path tests (conditional — only if plan contains guidedHappyPathApproved: true)**:
+   - Runs last — after autonomous and live E2E (if any)
+   - For each test: seed DB → present steps to user → user acts → verify via DB/API/logs → PASS/FAIL
+   - No browser automation. No parallel agents. Category 1 only.
+6. **Audit summary**: agents spawned, suites executed, docker exec count, cleanup status
 
 ## Phase 5 — Results & Docs
 
@@ -354,7 +461,7 @@ Verify against source: read model/serializer/DTO to confirm field exists in real
 
 **Fix cycle**: Runtime-fixable (env/container/stuck job) → before attempting any fix, verify the issue is real: re-read error output, check if the failure is transient (retry once), confirm root cause in logs/config. Only proceed with a fix after confirming the issue genuinely requires intervention. Spawn general-purpose subagent (foreground) to fix → re-run suite → max 3 cycles. Code bug → document (file, line, expected vs actual) → ask user.
 
-**Documentation**: Spawn general-purpose subagent (foreground). Timestamp via `date -u +"%Y-%m-%d-%H-%M-%S"`. Pattern: `{timestamp}_{semantic-name}.md`. Read `references/templates.md` first. Four doc types: test-results (always), pending-fixes (bugs/infra issues), pending-guided-tests (browser/visual/physical — include `guided/mobile` tests with physical device steps and verification commands), pending-autonomous-tests (identified but not run). Re-runs → append "Re-run" section.
+**Documentation**: Spawn general-purpose subagent (foreground). Timestamp via `date -u +"%Y-%m-%d-%H-%M-%S"`. Pattern: `{timestamp}_{semantic-name}.md`. Read `references/templates.md` first. Four doc types: test-results (always generated — the record is essential for regression tracking even when all tests pass), pending-fixes (bugs/infra issues), pending-guided-tests (browser/visual/physical + guided happy-path tests if approved), pending-autonomous-tests (identified but not run). Re-runs → append "Re-run" section. If live E2E or guided happy-path tests were executed, include their results in the test-results doc under dedicated suite sections. The documentation subagent receives all test results (autonomous + live E2E + guided) and generates unified output.
 
 **Cleanup**: Spawn general-purpose subagent (foreground). Remove `testDataPrefix` data only. Never touch pre-existing. Log actions. Verify with DB query.
 
@@ -389,6 +496,11 @@ Verify against source: read model/serializer/DTO to confirm field exists in real
 | Guided = happy path only | Category 1 only in guided mode — categories 2-9 autonomous-only |
 | Tool loading gate | Browser tools need pre-plan approval in autonomous mode, never in guided |
 | Plan self-containment | All context embedded in plan for post-reset survival — no "see above" references |
+| Live E2E = sandbox only | Live E2E suites require sandbox/test mode. Re-verified at runtime before CLI calls |
+| Live E2E = post-autonomous | Live E2E runs after all autonomous (mocked) suites complete |
+| Guided happy path = post-all | Guided happy-path runs last — after autonomous and live E2E |
+| Post-discovery prompts | Standard mode only — skipped when `guided` arg or regression mode active |
+| Documentation in every run | Test-results doc generated for every run. Embedded in plan execution protocol so it survives context reset |
 
 ## Operational Bounds
 
@@ -409,3 +521,7 @@ Verify against source: read model/serializer/DTO to confirm field exists in real
 | External downloads | Docker images via user's compose only. Playwright browsers if present. No other downloads |
 | Data access | Outside project: `~/.claude/settings.json` (RO), `~/.claude/trusted-configs/` (RW, one hash), `~/.claude/CLAUDE.md` (RO). `.env` scanned for patterns only — values never stored/logged |
 | Trust boundaries | Config SHA-256 verified out-of-repo. Untrusted inputs → analysis only → plan → user approval. No interpolation into commands |
+| Live E2E scope | Eligible services only (cli.available && !cli.blocked && feature-relevant). allowedOperations only. Runtime sandbox re-verification |
+| Guided happy path scope | Category 1 only. No browser automation. Sequential. Runs last |
+| Post-discovery prompts | Standard mode only — skipped for `guided` arg or regression mode |
+| Documentation output | Minimum 1 doc (test-results) per run. Embedded in execution protocol for post-reset survival |
