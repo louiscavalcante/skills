@@ -82,6 +82,20 @@ Print resolved scope, then proceed without waiting.
 
 **Step 2 — CLAUDE.md Deep Scan**: Delegate to Explore agent. Scan CLAUDE.md files up to 3 levels deep, plus `~/.claude/CLAUDE.md` and `.claude/CLAUDE.md`. Return discovered file list. Cache for Phase 2.
 
+**Step 2.5 — Tool Inventory** — ALWAYS runs (no caching — tools change between sessions):
+
+- **Orchestrator directly** (no agent spawn needed):
+  1. **Skills**: Extract available skills from system-reminder context (name, trigger description)
+  2. **Agents**: Extract available agent types from Agent tool description (type, capabilities summary)
+- **Delegate to Explore agent** (combine with Step 3 findings scan, or spawn separately):
+  3. **MCP servers**: Run `mcp-find` for available MCPs + scan `~/.claude/settings.json` for `mcpServers` key
+  4. **CLIs**: Probe common tools (`which curl`, `which jq`, `which ngrok`, `which uvx`) + external service CLIs from config
+- **Compile Tool Inventory**: Structured inventory with per-phase recommendations:
+  - Phase 1 (Findings): document parsing tools
+  - Phase 2 (Plan): skills and agents available for fix execution
+  - Phase 3 (Execution): service-specific MCPs, CLI tools, DB tools, testing tools
+  - Phase 4 (Results): documentation tools, verification tools
+
 **Step 3 — Findings Scan**: Delegate to Explore agent. Scan configured `_autonomous/` directories (`documentation.pendingFixes`, `documentation.testResults`, `documentation.fixResults`). Report: pending-fixes count, test-results with `### Requires Fix` or `### Vulnerabilities`, prior fix-results. If no actionable findings → **STOP**: "No findings. Run `/autonomous-tests` first."
 
 **Step 4 — Resume Detection**: Delegate to agent. Run `git diff --name-only` and cross-reference modified files against finding source files from Step 3. If fixes appear already applied (modified files overlap with files referenced in findings):
@@ -118,10 +132,12 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
 4. Full Phase 3/4 instructions with resolved values — no "see above"
 5. Config paths: `documentation.fixResults`, `documentation.pendingFixes`, `documentation.testResults`, `database.connectionCommand`, `testing.unitTestCommand`
 6. CLAUDE.md file list from Phase 0 Step 2
+7. Tool Inventory from Phase 0 — full inventory with per-phase recommendations so fix agents know which tools are available without re-scanning.
 
 - Execution Protocol (embed verbatim — orchestrator uses this after context reset):
   ```
   SETUP: Spawn general-purpose subagent (foreground). Reads source files referenced by findings, compiles Fix Context Documents, reads CLAUDE.md files, returns results.
+  TOOL CONTEXT: Fix agents receive relevant Tool Inventory subset (service MCPs, CLI tools, DB tools, testing tools) in their prompts.
   FLOW: STRICTLY SEQUENTIAL — one subagent at a time:
     1. For each selected item (in order):
        a. Spawn ONE general-purpose subagent (foreground)

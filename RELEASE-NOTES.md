@@ -1,5 +1,13 @@
 # Release Notes
 
+## v2.2.0 (2026-03-09)
+
+### Added
+- **Stripe Test Clock support** (autonomous-tests + swarm): Live E2E tests can now simulate time progression for subscription lifecycle testing (renewals, trials, billing cycles). Phase 2 detects test clock need via `testClockSupport.triggerKeywords` in the external services catalog. Phase 3 embeds a 10-step Stripe Test Clock sub-protocol in the Live E2E execution block — create clock, attach customer, create subscription, advance time, verify state via MCP, check webhooks, cleanup. CLI required for test clock operations (MCP lacks these endpoints); MCP used for complementary operations (customer creation, subscription verification).
+- **AskUserQuestion enforcement for guided tests** (autonomous-tests + swarm): Guided test step presentation now uses a structured `AskUserQuestion` call with formatted question and explicit options ("Done - ready to verify", "Skip this test", "Issue encountered"). Text-only output is PROHIBITED — ensures consistent UX and proper response routing (verify, skip, or record issue). Applied to guided mode, guided happy-path mode, and Phase 4 execution flow.
+- **Always-run Tool Inventory scan** (all 3 skills): Phase 0 now includes a Tool Inventory step that runs every session (no caching). Orchestrator extracts available skills and agent types from context; Explore agent scans for MCP servers and CLIs. Compiled inventory includes per-phase recommendations. Embedded in Phase 3 self-containment mandate and passed to subagents via `TOOL CONTEXT` lines in all execution protocols.
+- **External services catalog — Stripe test clocks** (autonomous-tests): Added `testClockSupport` object to Stripe entry with CLI operations, MCP complement operations, and trigger keywords. Added `stripe test_clocks create/advance/delete` to `allowedOperations` (sandbox scope). Extended `claudeMdKeywords` with subscription/billing terms.
+
 ## v2.1.0 (2026-03-09)
 
 ### Added

@@ -102,6 +102,20 @@ Spawn **Explore agent** (`subagent_type: "Explore"`, thoroughness: `"medium"`) t
 
 Agent reports back. Orchestrator writes to `capabilities` with `lastScanned` = UTC time (`date -u`).
 
+**Step 1.5: Tool Inventory** — ALWAYS runs (no caching — tools change between sessions):
+
+- **Orchestrator directly** (no agent spawn needed):
+  1. **Skills**: Extract available skills from system-reminder context (name, trigger description)
+  2. **Agents**: Extract available agent types from Agent tool description (type, capabilities summary)
+- **Delegate to Explore agent** (combine with Step 1 capabilities scan if triggered, or spawn separately if Step 1 used cache):
+  3. **MCP servers**: Run `mcp-find` for available MCPs + scan `~/.claude/settings.json` for `mcpServers` key
+  4. **CLIs**: External service detection (from Step 1) + probe common tools (`which curl`, `which jq`, `which ngrok`, `which uvx`)
+- **Compile Tool Inventory**: Structured inventory with per-phase recommendations:
+  - Phase 1 (Safety): relevant health-check CLIs, Docker MCP
+  - Phase 2 (Discovery): Explore agent, Grep/Glob, relevant MCPs for code analysis
+  - Phase 3 (Plan): skills and agents available for plan execution
+  - Phase 4 (Execution): service-specific MCPs (preferred over CLI), CLI fallbacks, browser tools, DB tools
+
 **CLAUDE.md deep scan** (Phase 0 + Phase 2): `find . -maxdepth 3 -name "CLAUDE.md" -type f` + `~/.claude/CLAUDE.md` + `.claude/CLAUDE.md`. Cache list for: capabilities scan, auto-extract, Phase 2 enrichment, Feature Context Document. Read each once.
 
 **Step 2: Config Check** — `test -f .claude/autonomous-tests.json && echo "CONFIG_EXISTS" || echo "CONFIG_MISSING"`. Schema: `references/config-schema.json`.
@@ -215,6 +229,7 @@ After the Feature Context Document is compiled, the orchestrator cross-reference
    - `!cli.available` → **unavailable** (CLI not installed)
    - Also check `capabilities.dockerMcps[]` for relevant sandbox MCPs
 3. **Compile eligibility list**: Per eligible service: name, mode, relevant `allowedOperations` matching the feature map, applicable MCP tools. Only services that are both available and relevant to the changed code appear.
+3.5. **Test clock detection**: For each eligible service with `testClockSupport` in the external services catalog, check the feature map against `testClockSupport.triggerKeywords`. If any keyword matches → set `testClockRequired: true` on the eligibility entry. Note: CLI required for clock operations per catalog `requiredCli`; MCP used for complementary operations per catalog `mcpOperations`.
 4. **Store**: `liveE2eEligibility: { eligible: [...], blocked: [...], unavailable: [...] }` — carried to prompts and Phase 3.
 
 ### Post-Discovery Prompts (standard mode only — skip if `guided` arg present or regression mode)
@@ -273,14 +288,16 @@ If eligibility list is empty AND `guided` arg present → skip prompt entirely.
 6. Credential role names from `testCredentials`
 7. If guided: per-test DB seed commands, user-facing step-by-step instructions, and verification queries
 8. Seed schema discovery mandate (embedded verbatim for Phase 4 agents)
-9. If live E2E approved: Live E2E Decision block — per-service: name, mode, relevant `allowedOperations`, applicable MCP tools, `userPromptTemplate` for runtime CLI gate. Embedded verbatim so post-reset orchestrator can prompt and execute.
+9. If live E2E approved: Live E2E Decision block — per-service: name, mode, relevant `allowedOperations`, applicable MCP tools, `userPromptTemplate` for runtime CLI gate. If `testClockRequired`: embed Test Clock sub-protocol (resolved from catalog `testClockSupport`). Embedded verbatim so post-reset orchestrator can prompt and execute.
 10. If guided happy path approved: Guided Happy Path Decision block — per-test: name, objective, prerequisites, step-by-step user instructions, DB seed commands, verification queries, expected outcomes.
 11. Documentation checklist (always embedded, never conditional) — the post-reset orchestrator needs this to know what files to generate after testing. Include: output directories from config (`documentation.*` paths), template reference path (`references/templates.md`), filename convention (`{timestamp}_{semantic-name}.md`, timestamp from `date -u`), and which doc types this run produces. At minimum: test-results doc. Conditionally: pending-fixes (if failures/findings exist), pending-guided-tests (if guided tests identified or approved), pending-autonomous-tests (if tests queued but not run). Without this embedded checklist, the orchestrator has no way to know about doc generation after context reset — which is why it gets skipped.
+12. Tool Inventory from Phase 0 — full inventory with per-phase recommendations so subagents know which tools are available without re-scanning.
 
 - Execution Protocol — autonomous mode (embed verbatim — orchestrator uses this after context reset):
   ```
   SERVICE RESTORATION: Spawn general-purpose subagent (foreground). Re-verify all services from Service Readiness Report using healthCheck from config. Unhealthy → restart via startCommand + poll 5s/30s. Start webhook listeners. STOP if any service unreachable. Returns updated Service Readiness Report.
   SETUP: Spawn general-purpose subagent (foreground). Reads source files, compiles Feature Context Document, returns results.
+  TOOL CONTEXT: Suite agents receive relevant Tool Inventory subset (service MCPs, CLI fallbacks, browser tools, DB tools) in their prompts.
   FLOW: STRICTLY SEQUENTIAL — one subagent at a time:
     1. For each suite (in order):
        a. Spawn ONE general-purpose subagent (foreground)
@@ -302,10 +319,16 @@ If eligibility list is empty AND `guided` arg present → skip prompt entirely.
   NO BROWSER AUTOMATION: agent-browser and Playwright MUST NOT be loaded
   CATEGORIES: Happy-path workflows ONLY
   SERVICE RESTORATION: Spawn general-purpose subagent (foreground). Re-verify all services from Service Readiness Report using healthCheck from config. Unhealthy → restart via startCommand + poll 5s/30s. Start webhook listeners. STOP if any service unreachable. Returns updated Service Readiness Report.
+  TOOL CONTEXT: Seeding/verification agents receive DB + service tool subset from Tool Inventory.
   FLOW: For each guided test (in order):
     1. Spawn ONE general-purpose subagent (foreground) for DB seeding + external service setup
     2. Subagent seeds database, configures services, returns readiness status
-    3. Orchestrator presents steps to user via AskUserQuestion
+    3. Orchestrator presents steps via AskUserQuestion tool (MANDATORY — text output PROHIBITED):
+       Question: "## Guided Test: {test-name}\n\n**Setup complete**: {seeds/services summary}\n\n**Steps**:\n1. {step}\n2. {step}\n...\n\n**What to verify**: {expected outcomes}"
+       Options: ["Done - ready to verify", "Skip this test", "Issue encountered"]
+       - "Done" → spawn verification subagent
+       - "Skip" → record SKIP, proceed to next test
+       - "Issue" → follow-up AskUserQuestion for issue description, record as finding
     4. User performs actions on real device/browser
     5. Orchestrator verifies results via DB queries/API/logs
     6. Record PASS/FAIL → next test
@@ -316,6 +339,7 @@ If eligibility list is empty AND `guided` arg present → skip prompt entirely.
   ```
   RUNS AFTER: All autonomous (mocked) suites complete. Live E2E tests real external services in sandbox — running them first would risk polluting the mocked test environment.
   SERVICES: {embedded per-service details from Live E2E Decision block}
+  TOOL CONTEXT: Agents receive target service's MCP tools (preferred) + CLI (fallback) from Tool Inventory.
   FLOW: Sequential — one subagent at a time:
     1. For each live E2E suite:
        a. CLI gate: AskUserQuestion per service using embedded userPromptTemplate (once per service, not per suite)
@@ -324,6 +348,17 @@ If eligibility list is empty AND `guided` arg present → skip prompt entirely.
        d. Sandbox check: agent re-runs modeDetection.command before first CLI call. If production detected → abort live E2E for that service (keys may have changed since Phase 0).
        e. Spawn ONE general-purpose subagent (foreground) with full context + CLI details + allowed/prohibited operations
        f. Record PASS/FAIL → next suite
+  TEST CLOCK SUB-PROTOCOL (conditional — only when testClockRequired on service):
+    All operations resolved from `testClockSupport` in external-services-catalog.json.
+    1. Create clock via catalog `cliOperations` (frozen at start time)
+    2. Create entities attached to clock via catalog `mcpOperations` (preferred) or CLI
+    3. Set up recurring lifecycle scenario per feature map
+    4. Advance clock to future time via catalog `cliOperations`
+    5. Verify state changes via catalog `mcpOperations`
+    6. Verify expected events received per `triggerKeywords`
+    7. Repeat steps 4-6 for additional time scenarios per test plan
+    8. Cleanup: delete clock via catalog `cliOperations` — ALWAYS execute, even on failure (wrap in finally/trap)
+    NOTE: See catalog `testClockSupport` for exact CLI commands and MCP operations.
   ```
 
 - Execution Protocol — guided happy path mode (embed verbatim — conditional, only if guidedHappyPathApproved):
@@ -334,7 +369,12 @@ If eligibility list is empty AND `guided` arg present → skip prompt entirely.
   FLOW: For each guided test:
     1. Spawn ONE general-purpose subagent (foreground) for DB seeding + service setup
     2. Subagent seeds database (seed schema discovery mandate), returns readiness
-    3. Orchestrator presents steps to user via AskUserQuestion
+    3. Orchestrator presents steps via AskUserQuestion tool (MANDATORY — text output PROHIBITED):
+       Question: "## Guided Test: {test-name}\n\n**Setup complete**: {seeds/services summary}\n\n**Steps**:\n1. {step}\n2. {step}\n...\n\n**What to verify**: {expected outcomes}"
+       Options: ["Done - ready to verify", "Skip this test", "Issue encountered"]
+       - "Done" → spawn verification subagent
+       - "Skip" → record SKIP, proceed to next test
+       - "Issue" → follow-up AskUserQuestion for issue description, record as finding
     4. User performs actions on real device/browser
     5. Orchestrator spawns verification subagent — DB/API/log checks
     6. Record PASS/FAIL → next test
@@ -451,7 +491,7 @@ Verify against source: read model/serializer/DTO to confirm field exists in real
    - Record PASS/FAIL, check related project logs
 5. **Guided happy-path tests (conditional — only if plan contains guidedHappyPathApproved: true)**:
    - Runs last — after autonomous and live E2E (if any)
-   - For each test: seed DB → present steps to user → user acts → verify via DB/API/logs → PASS/FAIL
+   - For each test: seed DB → present steps via AskUserQuestion (MANDATORY — text output PROHIBITED) with options ["Done", "Skip", "Issue"] → user acts → verify via DB/API/logs → PASS/FAIL
    - No browser automation. No parallel agents. Category 1 only.
 6. **Audit summary**: agents spawned, suites executed, docker exec count, cleanup status
 

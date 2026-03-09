@@ -16,13 +16,33 @@
     "allowedOperations": [
       { "command": "stripe listen", "purpose": "Webhook forwarding to local endpoint" },
       { "command": "stripe trigger", "purpose": "Event simulation in sandbox" },
-      { "command": "stripe paymentintents", "scope": "sandbox" }
+      { "command": "stripe paymentintents", "scope": "sandbox" },
+      { "command": "stripe test_clocks create", "scope": "sandbox", "purpose": "Create test clock for time simulation" },
+      { "command": "stripe test_clocks advance", "scope": "sandbox", "purpose": "Advance test clock to future time" },
+      { "command": "stripe test_clocks delete", "scope": "sandbox", "purpose": "Cleanup test clock after testing" }
     ],
+    "testClockSupport": {
+      "description": "Simulate time progression for subscription lifecycle testing (renewals, trials, billing cycles)",
+      "requiredCli": true,
+      "mcpComplement": true,
+      "cliOperations": [
+        "stripe test_clocks create --frozen-time={ISO-8601}",
+        "stripe test_clocks advance --test-clock={id} --frozen-time={future-ISO-8601}",
+        "stripe test_clocks delete --test-clock={id}"
+      ],
+      "mcpOperations": [
+        "create_customer (attach to test clock)",
+        "create_product + create_price (recurring)",
+        "list_subscriptions (verify state after time advance)",
+        "fetch_stripe_resources (inspect clock, invoices, events)"
+      ],
+      "triggerKeywords": ["subscription", "renewal", "trial", "billing cycle", "billing_cycle_anchor", "trial_end", "cancel_at_period_end", "recurring", "invoice.payment_succeeded", "customer.subscription.updated", "customer.subscription.deleted"]
+    },
     "prohibitedFlags": ["--live"],
     "prohibitedOperations": ["account", "transfers create", "payouts create"],
     "userPromptTemplate": "This run includes {name} CLI operations (webhook forwarding, event simulation, sandbox payment intents) in your **{mode}** environment. Proceed?",
     "blockedWarning": "{name} CLI is configured with production keys. Autonomous tests will NOT use {name} CLI to prevent production side-effects. Switch to test/sandbox keys to enable {name} testing.",
-    "claudeMdKeywords": ["stripe", "stripe listen", "stripe trigger", "stripe paymentintents", "stripe cli", "sk_test_", "pk_test_", "STRIPE_SECRET_KEY", "STRIPE_PUBLISHABLE_KEY"]
+    "claudeMdKeywords": ["stripe", "stripe listen", "stripe trigger", "stripe paymentintents", "stripe cli", "sk_test_", "pk_test_", "STRIPE_SECRET_KEY", "STRIPE_PUBLISHABLE_KEY", "subscription", "renewal", "trial", "billing cycle", "recurring", "invoice", "stripe billing"]
   },
   {
     "name": "AWS",
