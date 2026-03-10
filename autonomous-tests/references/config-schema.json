@@ -1,12 +1,34 @@
 {
-  "$schema": "autonomous-tests-config-v5",
-  "version": 5,
+  "$schema": "autonomous-tests-config-v6",
+  "version": 6,
+  "_migration_v5_to_v6": {
+    "description": "Auto-upgrade from v5: add frontendType='none' to project and each relatedProject, add frontendIndicators={detected:[],source:'none'}, add logFile=null to each service, add e2eUrl=null and browserPreference='agent-browser' to testing, add chromeDevtools=false to capabilities.frontendTesting, remove any liveE2eEligibility or credentialType fields, bump version to 6.",
+    "addedFields": [
+      "project.frontendType",
+      "project.frontendIndicators",
+      "project.services[].logFile",
+      "relatedProjects[].frontendType",
+      "relatedProjects[].logCommand",
+      "testing.e2eUrl",
+      "testing.browserPreference",
+      "capabilities.frontendTesting.chromeDevtools"
+    ],
+    "removedFields": [
+      "liveE2eEligibility",
+      "credentialType"
+    ]
+  },
   "initialized": "ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ)",
   "lastRun": "ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ)",
   "project": {
     "root": "/absolute/path",
     "name": "project-name",
     "topology": "single | monorepo | multi-repo",
+    "frontendType": "webapp | mobile | api-only | none",
+    "frontendIndicators": {
+      "detected": ["next", "react-dom"],
+      "source": "package.json"
+    },
     "services": [
       {
         "name": "service-name",
@@ -15,6 +37,7 @@
         "startCommand": "docker compose up -d",
         "healthCheck": "curl -sf http://localhost:8000/_health/live",
         "logCommand": "docker logs -f container-name",
+        "logFile": "/tmp/test-logs/service-name.log",
         "container": "container-name | null"
       }
     ]
@@ -24,6 +47,7 @@
       "name": "project-name",
       "path": "/absolute/path/to/sibling",
       "relationship": "webapp | mobile | api | worker | shared-lib | docs",
+      "frontendType": "webapp | mobile | api-only | none",
       "startCommand": "npm run dev | null",
       "healthCheck": "curl -sf http://localhost:3000 | null",
       "logCommand": "docker logs -f container-name | command to view logs for this related project | null",
@@ -66,7 +90,9 @@
   "testing": {
     "unitTestCommand": "docker compose exec backend python -m pytest -x -q",
     "testDataPrefix": "test_e2e_",
-    "contextFiles": ["CLAUDE.md", "docs/architecture.md"]
+    "contextFiles": ["CLAUDE.md", "docs/architecture.md"],
+    "e2eUrl": "http://localhost:3000 | null",
+    "browserPreference": "agent-browser | playwright"
   },
   "documentation": {
     "testResults": "docs/_autonomous/test-results",
@@ -94,7 +120,8 @@
     ],
     "frontendTesting": {
       "agentBrowser": false,
-      "playwright": false
+      "playwright": false,
+      "chromeDevtools": false
     },
     "lastScanned": "ISO-8601 UTC",
     "rescanThresholdDays": 7

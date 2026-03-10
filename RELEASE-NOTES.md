@@ -1,5 +1,24 @@
 # Release Notes
 
+## v3.0.0 — Test Taxonomy Overhaul, Chrome DevTools, Log Monitoring
+
+- **BREAKING**: Config schema v5 → v6 (auto-migrates)
+- **BREAKING**: Test classification renamed — "E2E" → "Integration" for API tests, true "E2E" for browser/device tests
+- **Removed**: "Live E2E" concept entirely — never test production
+- **Added**: Chrome DevTools MCP integration for E2E network/console/DOM monitoring
+- **Added**: Service log monitoring during all test phases
+- **Added**: Project type auto-detection (mobile/webapp/api-only)
+- **Added**: 17-item security observation checklist (replaces 7-category system)
+- **Added**: Explicit data seeding in plans (never guess schemas/values)
+- **Added**: 9 new reference files for extracted protocols and definitions
+- **Changed**: Unit tests run ONCE at end as regression (was scattered in suites)
+- **Changed**: Integration tests always use curl (explicit request/response)
+- **Changed**: E2E tests use agent-browser (primary) or Playwright (fallback)
+- **Changed**: Each test passed individually to subagent (no batch scripts)
+- **Improved**: autonomous-tests SKILL.md reduced from 572 to ~408 lines
+- **Improved**: autonomous-tests-swarm SKILL.md reduced from 614 to ~440 lines
+- **Improved**: Execution protocols extracted to reference files for better maintainability
+
 ## v2.3.0
 
 ### Added

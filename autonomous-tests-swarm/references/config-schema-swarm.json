@@ -1,6 +1,8 @@
 {
   "$schema": "autonomous-tests-swarm-config",
   "_description": "Swarm section added to .claude/autonomous-tests.json — each agent spins up its own isolated Docker environment",
+  "_baseConfigVersion": "autonomous-tests-config-v6 — this swarm config extends the base v6 schema. Ensure the parent autonomous-tests.json has version >= 6 before applying swarm fields.",
+  "_v6Compatibility": "v6 adds frontendType, frontendIndicators, logFile on services, e2eUrl/browserPreference in testing, and chromeDevtools in capabilities. Swarm agents inherit these from the base config and add per-agent log isolation below.",
   "swarm": {
     "dockerContext": "docker-desktop | default | custom-name — auto-detected, Docker Desktop prioritized",
     "mode": "compose | raw-docker — compose uses docker-compose files; raw-docker uses docker run commands",
@@ -42,6 +44,12 @@
         "_comment": "direct: value IS the port (PORT=8000); url: port embedded in URL (DATABASE_URL=postgres://localhost:5432/db)"
       }
     ],
+    "agentLogs": {
+      "logDir": "/tmp/autonomous-swarm-{sessionId}/logs/",
+      "perAgentLogFile": "/tmp/autonomous-swarm-{sessionId}/logs/agent-{N}.log",
+      "serviceLogPattern": "/tmp/autonomous-swarm-{sessionId}/logs/agent-{N}-{service}.log",
+      "_comment": "Per-agent log isolation — each agent writes service logs to its own namespaced path. Maps to base config project.services[].logFile resolved per agent."
+    },
     "initialization": {
       "commands": [
         "docker compose -p {projectName} exec backend python manage.py migrate",
@@ -100,6 +108,7 @@
     "{containerName}": "swarm-{N}-{service} — container name",
     "{sessionId}": "unique session identifier (timestamp-based, from date -u +%Y%m%d%H%M%S)",
     "{auditDir}": "/tmp/autonomous-swarm-{sessionId}/audit/ — per-session audit log directory",
-    "{resourceFlags}": "--memory {memory} --cpus {cpus} --read-only --tmpfs {mount} — resolved from swarm.resourceLimits"
+    "{resourceFlags}": "--memory {memory} --cpus {cpus} --read-only --tmpfs {mount} — resolved from swarm.resourceLimits",
+    "{N}": "agent number (0-based index) — used in log paths, container names, and port assignments"
   }
 }

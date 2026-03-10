@@ -1,8 +1,8 @@
 # autonomous-tests
 
-Project-agnostic autonomous E2E test runner for Claude Code.
+Project-agnostic autonomous test runner for Claude Code.
 
-Analyzes your code changes (and optional doc file references), auto-detects available testing tools, learns from previous test runs, generates a test plan for your approval, then executes end-to-end tests sequentially using subagents — all against your local stack. Produces structured markdown reports and cleans up after itself.
+Analyzes your code changes (and optional doc file references), auto-detects available testing tools, learns from previous test runs, generates a test plan for your approval, then executes integration tests (curl), E2E tests (browser), and regression tests (unit) sequentially using subagents — all against your local stack. Produces structured markdown reports and cleans up after itself.
 
 ## Table of Contents
 
@@ -25,9 +25,14 @@ Analyzes your code changes (and optional doc file references), auto-detects avai
 ## What It Does
 
 - **Analyzes git diffs** to identify features, endpoints, and database operations touched
+- **Three test types** — integration tests (curl-based API testing), E2E tests (browser-based via agent-browser/Playwright), and regression tests (unit tests run once at end)
+- **Chrome DevTools MCP integration** — monitors network issues, console errors, and DOM state during E2E browser tests
+- **Service log monitoring** — captures and analyzes service logs during all test phases, checks for errors between suites
+- **Project type auto-detection** — detects mobile, webapp, or API-only projects to generate appropriate test types
+- **17-item security observation checklist** — comprehensive security analysis applied to each test suite
 - **Guided mode** — test existing features without code changes via `guided "description"` or `guided file:<path>`
 - **Accepts `.md` doc references** as additional test context via `file:<path>`
-- **Auto-detects capabilities** — Docker MCPs, agent-browser, Playwright, external service CLIs — and caches them
+- **Auto-detects capabilities** — Docker MCPs, agent-browser, Playwright, chrome-devtools-mcp, external service CLIs — and caches them
 - **Learns from past runs** by scanning `_autonomous/` history for related test results and known issues
 - **Traces dependency graphs** across files and related projects to understand blast radius
 - **Generates a test plan** covering happy paths, edge cases, race conditions, security, and more — with mandatory human approval before execution
@@ -165,7 +170,7 @@ On first run, the skill creates `.claude/autonomous-tests.json` in your project 
 | `userContext` | Flaky areas, test credentials, priorities, notes |
 | `capabilities` | Auto-detected testing tools (Docker MCPs, agent-browser, Playwright, external service CLIs) |
 
-See [`references/config-schema.json`](references/config-schema.json) for the full schema.
+See [`references/config-schema.json`](references/config-schema.json) for the full schema (v6).
 
 ### Database Seeding
 
@@ -230,8 +235,9 @@ The skill auto-detects available testing tools and caches results in the `capabi
 | Capability | How Detected | How Used | Safety |
 |---|---|---|---|
 | Docker MCPs | `mcp-find` search | Agents `mcp-add` safe MCPs at runtime for relevant tests | Only `safe: true` MCPs are activated |
-| agent-browser | `which agent-browser` | UI testing, browser-based verification | Read-only by default |
-| Playwright | `which playwright` / `npx playwright --version` | Frontend component and integration tests | Local only |
+| agent-browser | `which agent-browser` | E2E browser-based user flow testing | Read-only by default |
+| chrome-devtools-mcp | `mcp-find` + settings scan | Network/console/DOM monitoring during E2E tests | Read-only |
+| Playwright | `which playwright` / `npx playwright --version` | E2E fallback when agent-browser unavailable | Local only |
 | External Service CLIs | Catalog-based detection + CLAUDE.md scanning | Per catalog `allowedOperations` | **Blocked if production keys detected** |
 
 Capabilities are cached with a `lastScanned` timestamp and re-scanned when older than `rescanThresholdDays` (default: 7). Use the `rescan` argument to force a fresh scan:
@@ -353,7 +359,7 @@ Phase 9: Advisory   ← Remind user to /clear before next skill
 - **Phase 2** health-checks each service and starts any that are down, including related projects.
 - **Phase 3** reads every changed file (or traces a guided feature through the codebase), processes `file:<path>` references if provided, builds a feature map (endpoints, DB ops, auth flows), traces the full dependency graph across project boundaries, and scans `_autonomous/` folders for prior test history related to current changes.
 - **Phase 4** enters plan mode with test suites covering happy paths, validation, idempotency, error handling, race conditions, security, and edge cases. You approve before anything executes.
-- **Phase 5** executes one suite at a time: spawns a subagent, assigns it a suite, waits for completion, shuts it down, then spawns the next. Each agent gets the full feature context (including prior history and available capabilities) and an assigned test credential role. Sequential execution prevents credential conflicts and log cross-contamination. Agents leverage detected capabilities — agent-browser for UI tests, Playwright for frontend tests, safe Docker MCPs, and external service CLIs when not blocked.
+- **Phase 5** executes one suite at a time: spawns a subagent, assigns it a suite, waits for completion, shuts it down, then spawns the next. Each agent gets the full feature context (including prior history and available capabilities) and an assigned test credential role. Sequential execution prevents credential conflicts and log cross-contamination. Integration tests use curl, E2E tests use agent-browser (primary) or Playwright (fallback) with chrome-devtools-mcp monitoring, and unit tests run once at the end as regression. Agents leverage detected capabilities — safe Docker MCPs and external service CLIs when not blocked.
 - **Phase 6** auto-fixes runtime issues (env vars, containers) up to 3 times. Code bugs are documented and shown to you.
 - **Phase 7** generates timestamped markdown reports from templates.
 - **Phase 8** removes test data by prefix, verifies cleanup with DB queries, and logs every action.

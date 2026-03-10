@@ -1,8 +1,15 @@
 # autonomous-tests-swarm
 
-Autonomous E2E test runner with **per-agent Docker isolation** for Claude Code.
+Autonomous test runner with **per-agent Docker isolation** for Claude Code.
 
-Each test agent spins up its own fully isolated Docker environment — database, API, and related services — on unique ports. Agents run migrations, seed their own test data, execute test suites, and tear down independently. No shared state, no credential conflicts, true parallel testing.
+Each test agent spins up its own fully isolated Docker environment — database, API, and related services — on unique ports. Integration suites run in PARALLEL (each agent with its own Docker stack), E2E suites run SEQUENTIALLY against the shared local stack. Agents run migrations, seed their own test data, execute test suites, and tear down independently. No shared state, no credential conflicts, true parallel testing for integration suites.
+
+**Key features over autonomous-tests:**
+- Three test types: integration tests (curl-based, parallel), E2E tests (browser-based, sequential), regression tests (unit, last)
+- Chrome DevTools MCP integration for E2E network/console/DOM monitoring
+- Service log monitoring during all test phases
+- Project type auto-detection (mobile/webapp/api-only)
+- 17-item security observation checklist per suite
 
 ## Table of Contents
 
@@ -208,7 +215,7 @@ Same as [`autonomous-tests` configuration](../autonomous-tests/README.md#configu
 | `audit` | Per-agent structured audit logs — `enabled` (default: true), `logDir`, `schemaVersion` (`"1.0"`). Logs command timelines, resource config, and cleanup verification per agent |
 | `cleanup` | Teardown options (remove volumes, orphans) |
 
-See [`references/config-schema-swarm.json`](references/config-schema-swarm.json) for the full schema.
+See [`references/config-schema-swarm.json`](references/config-schema-swarm.json) for the full schema (v6).
 
 ### Template Placeholders
 

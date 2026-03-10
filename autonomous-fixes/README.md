@@ -26,8 +26,10 @@ Reads findings from `autonomous-tests` output (bugs, failed tests, security vuln
 
 ## What It Does
 
-- **Parses findings** from `autonomous-tests` output (pending-fixes, test-results, fix-results)
+- **Parses findings** from `autonomous-tests` output (pending-fixes, test-results, fix-results) — supports integration test, E2E test, and regression test findings
 - **Categorizes findings** into Vulnerabilities (V-prefix), Bugs (F-prefix), Failed Tests (T-prefix), and Informational (G/A)
+- **17-item security checklist awareness** — V-prefix fixes reference the security observation checklist for comprehensive remediation
+- **Service log monitoring awareness** — incorporates log-based findings from test results
 - **Presents findings** for user selection — always prompts even in dontAsk/bypass mode
 - **Supports pre-selection** via arguments: `vulnerability`, `critical`, `high`, `all`, `file:<path>`
 - **Plans fixes** in plan mode with mandatory human approval
@@ -162,7 +164,7 @@ This skill reuses `.claude/autonomous-tests.json` — no separate configuration 
 |---|---|---|
 | `documentation.fixResults` | `docs/_autonomous/fix-results` | Output path for fix-results documents |
 
-See the [autonomous-tests configuration docs](../autonomous-tests/README.md#configuration) for full config details.
+See the [autonomous-tests configuration docs](../autonomous-tests/README.md#configuration) for full config details (v6).
 
 [Back to top](#autonomous-fixes)
 

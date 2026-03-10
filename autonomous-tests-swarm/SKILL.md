@@ -1,6 +1,6 @@
 ---
 name: autonomous-tests-swarm
-description: 'Run autonomous E2E tests with per-agent Docker isolation. Each agent spins up its own database, API, and services on unique ports — true parallel testing with zero credential conflicts. Args: staged | unstaged | N | working-tree | file:<path> | rescan | guided [description]'
+description: 'Run autonomous tests (integration + E2E) with per-agent Docker isolation. Each agent spins up its own database, API, and services on unique ports — true parallel testing with zero credential conflicts. Args: staged | unstaged | N | working-tree | file:<path> | rescan | guided [description]'
 argument-hint: 'staged | unstaged | N | working-tree | file:<path> | rescan | guided'
 disable-model-invocation: true
 allowed-tools: Bash(*), Read(*), Write(*), Edit(*), Glob(*), Grep(*), Agent(*),
@@ -28,11 +28,19 @@ hooks:
 - Docker Context: !`docker context show 2>/dev/null || echo "unknown"`
 - Config: !`test -f .claude/autonomous-tests.json && echo "YES" || echo "NO -- first run"`
 - Swarm Config: !`python3 -c "import json;c=json.load(open('.claude/autonomous-tests.json'));print('YES' if 'swarm' in c else 'NO -- needs setup')" 2>/dev/null || echo "NO -- config missing"`
-- Capabilities: !`python3 -c "import json;c=json.load(open('.claude/autonomous-tests.json'));caps=c.get('capabilities',{});mcps=len(caps.get('dockerMcps',[]));ab='Y' if caps.get('frontendTesting',{}).get('agentBrowser') else 'N';pw='Y' if caps.get('frontendTesting',{}).get('playwright') else 'N';ec=sum(1 for s in c.get('externalServices',[]) if s.get('cli',{}).get('available'));print(f'MCPs:{mcps} agent-browser:{ab} playwright:{pw} ext-clis:{ec} scanned:{caps.get(\"lastScanned\",\"never\")}')" 2>/dev/null || echo "NOT SCANNED"`
 
 ## Role
 
-Project-agnostic autonomous E2E test runner with **per-agent Docker isolation**. Each agent spins up its own fully isolated Docker environment (database, API, related services) on unique ports, runs migrations/seeds, executes test suites, and tears down. No shared state, no credential conflicts, true parallel testing. Never touch production.
+Project-agnostic autonomous test runner with parallel execution via isolated Docker stacks. Analyzes code changes, auto-detects project capabilities, generates comprehensive test plans covering integration tests (curl-based API testing) and E2E tests (browser-based user flows), executes integration suites in PARALLEL (each agent with its own Docker stack on unique ports) and E2E suites SEQUENTIALLY, and documents findings for the test-fix-retest cycle.
+
+## Test Taxonomy
+
+This skill generates three types of tests. Read `../autonomous-tests/references/test-taxonomy.md` for full definitions:
+- **Integration Tests**: API-level via `curl`. Security-focused request/response analysis. Classification: `integration/api`.
+- **E2E Tests**: Frontend-to-backend flows via `agent-browser`/Playwright + chrome-devtools-mcp. Classification: `e2e/webapp`, `e2e/mobile`.
+- **Regression Tests**: Unit tests (`testing.unitTestCommand`) run ONCE at the end. Classification: `regression/unit`.
+
+Read `../autonomous-tests/references/security-checklist.md` for the 17-item security observation checklist applied to each suite.
 
 ## Orchestrator Protocol
 
@@ -53,7 +61,9 @@ The main agent is the Orchestrator. It coordinates phases but NEVER executes ope
 - Compile summaries from agent reports
 - Make phase-gating decisions (proceed/stop/abort)
 
-**Reporting hierarchy:** Agent → Orchestrator → Plan
+**Parallel spawning**: For integration suites, Orchestrator spawns MULTIPLE background subagents (`run_in_background: true`) up to `maxAgents` concurrent. E2E suites remain strictly sequential.
+
+**Reporting hierarchy:** Agent -> Orchestrator -> Plan
 
 ## Arguments: $ARGUMENTS
 
@@ -62,25 +72,25 @@ The main agent is the Orchestrator. It coordinates phases but NEVER executes ope
 | _(empty)_ | Default: working-tree (staged + unstaged) with smart doc analysis |
 | `staged` | Staged changes only |
 | `unstaged` | Unstaged changes only |
-| `N` (number) | Last N commits only |
-| `working-tree` | Staged + unstaged changes (same as default) |
+| `N` (number) | Last N commits (e.g., `1` = last commit) |
+| `working-tree` | Staged + unstaged (same as default) |
 | `file:<path>` | `.md` doc as additional test context. Combinable. |
-| `rescan` | Force re-scan capabilities. Combinable. |
-| `guided` | User augmentation mode (single-agent) — bypasses git diff. Alone: prompts user. |
-| `guided "description"` | Description-based: happy-path workflows only, user performs actions. Single-agent. |
-| `guided file:<path>` | Doc-based: happy-path workflows only, user performs actions. Single-agent. |
+| `rescan` | Force capabilities re-scan. Combinable. |
+| `guided` | User augmentation mode — bypasses git diff. Alone: prompts for doc or description. |
+| `guided "desc"` | Description-based: happy-path workflows only, user performs actions. |
+| `guided file:<path>` | Doc-based: happy-path workflows only, user performs actions. |
 
-Args are space-separated. `file:` prefix detected, path validated as existing `.md` relative to project root. Combinable (e.g., `staged file:docs/feature.md rescan`).
+Space-separated, combinable (e.g., `staged file:docs/feature.md rescan`). `file:` validated as existing `.md` relative to project root.
 
 **Guided mode** — user augmentation (NOT automation):
 - **Doc-based** (`guided file:<path>` or pick from `docs/`/`_autonomous/pending-guided-tests/`): happy-path workflows only.
 - **Description-based** (`guided "description"` or describe when prompted): happy-path workflows only.
 
-User performs all actions on their real device/browser. Claude provides step-by-step instructions and verifies results via DB queries/API/logs. Only happy-path workflows in guided mode. Categories 2-9 handled exclusively in autonomous mode — NEVER in guided session. No agent-browser, no Playwright — guided mode never loads or uses browser automation tools. **Single agent execution** — guided mode overrides the parallel protocol. Spawn ONE agent at a time, sequentially.
+User performs all actions on their real device/browser. Claude provides step-by-step instructions and verifies results via DB queries/API/logs. Only happy-path workflows in guided mode. Categories 2-8 handled exclusively in autonomous mode — NEVER in guided session. No agent-browser, no Playwright — guided mode never loads or uses browser automation tools.
 
-`guided` alone prompts via `AskUserQuestion`. Combinable with `rescan` but **NOT** with `staged`/`unstaged`/`N`/`working-tree`.
+`guided` alone prompts via `AskUserQuestion` to pick a doc or describe a feature. Combinable with `rescan` but NOT with `staged`/`unstaged`/`N`/`working-tree` (git-scope args incompatible — guided bypasses git diff).
 
-Smart doc analysis always active in standard mode: identify relevant `docs/` files by path, feature name, cross-references — read only those.
+Smart doc analysis always active in standard mode: match `docs/` files to changed code by path, feature name, cross-references — read only relevant docs.
 
 Print resolved scope, then proceed without waiting.
 
@@ -88,527 +98,343 @@ Print resolved scope, then proceed without waiting.
 
 ## Phase 0 — Bootstrap
 
-**Step 0: Prerequisites Check** — read `~/.claude/settings.json`:
+**Config hash method**: `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"` — referenced throughout as "Config hash method".
 
-1. **ExitPlanMode hook** (informational): if absent, inform user it's skill-scoped and works automatically. Continue.
+**Step 0: Prerequisites Check** — Read `~/.claude/settings.json`:
+1. **ExitPlanMode hook** (informational): if missing -> inform user the skill-scoped hook handles it automatically; global setup available via the script. Continue.
 2. **AskUserQuestion hook** (informational): same as above. Continue.
 
-**Step 1: Capabilities Scan** — delegate to Explore agent.
+**Step 1: Capabilities Scan** — Triggers: `rescan` arg, `capabilities` missing, or `lastScanned` older than `rescanThresholdDays` (default 7 days). If none -> use cache.
 
-Triggers: `rescan` present, `capabilities` missing, or `lastScanned` older than `rescanThresholdDays` (default 7). If none, use cache.
+Spawn **Explore agent** (`subagent_type: "Explore"`, thoroughness: `"medium"`) to perform:
+1. **Docker MCP Discovery**: `mcp-find` for MCPs matching service names and generic queries. Record `name`, `description`, `mode`; `safe: true` only for known sandbox MCPs. If unavailable -> empty array.
+2. **Frontend Testing**: `which agent-browser`, `which playwright`/`npx playwright --version` -> set `frontendTesting` booleans.
+3. **Chrome DevTools MCP Detection**: Run `mcp-find` for chrome-devtools; scan `~/.claude.json` and `~/.claude/settings.json` for `mcpServers` containing `chrome-devtools`. Store in `capabilities.frontendTesting.chromeDevtools`.
+4. **Project Type Detection**: Read `../autonomous-tests/references/project-type-detection.md`. Scan `package.json` files in project root and `relatedProjects[]` paths. Store in `project.frontendType` and `relatedProjects[].frontendType`.
+5. **External Service CLI Detection**: Load `references/external-services-catalog.json`. Scan CLAUDE.md files for `claudeMdKeywords`. Per match: run `detectionCommand` -> if available, run `modeDetection.command` -> pattern-match -> populate `allowedOperations`/`prohibitedFlags` -> merge into `externalServices[]`.
 
-Spawn ONE Explore agent (`subagent_type: "Explore"`, thoroughness: `"medium"`) for three parallel checks:
-1. **Docker MCP Discovery**: `mcp-find` with service names and generic queries. Record `name`, `description`, infer `mode`, `safe: true` only for sandbox MCPs. If unavailable, `dockerMcps: []`.
-2. **Frontend Testing**: `which agent-browser`, `which playwright`/`npx playwright --version` → set `frontendTesting` booleans.
-3. **External Service CLI Detection**: load `autonomous-tests/references/external-services-catalog.json`. Scan CLAUDE.md files for `claudeMdKeywords`. For matches: run `detectionCommand` → `modeDetection.command` → pattern-match: `production` → blocked; `sandbox` → allowed; no match → allowed. Populate `cli.*` fields. Merge into `externalServices[]`.
-
-Write to `capabilities` with `lastScanned` = current UTC time.
+Agent reports back. Orchestrator writes to `capabilities` with `lastScanned` = UTC time (`date -u`).
 
 **Step 1.5: Tool Inventory** — ALWAYS runs (no caching — tools change between sessions):
 
-- **Orchestrator directly** (no agent spawn needed):
-  1. **Skills**: Extract available skills from system-reminder context (name, trigger description)
-  2. **Agents**: Extract available agent types from Agent tool description (type, capabilities summary)
-- **Delegate to Explore agent** (combine with Step 1 capabilities scan if triggered, or spawn separately if Step 1 used cache):
-  3. **MCP servers**: Run `mcp-find` for available MCPs + scan `~/.claude/settings.json` for `mcpServers` key
-  4. **CLIs**: External service detection (from Step 1) + probe common tools (`which curl`, `which jq`, `which ngrok`, `which uvx`)
-- **Compile Tool Inventory**: Structured inventory with per-phase recommendations:
-  - Phase 1 (Safety): relevant health-check CLIs, Docker MCP
-  - Phase 2 (Discovery): Explore agent, Grep/Glob, relevant MCPs for code analysis
-  - Phase 3 (Plan): skills and agents available for plan execution
-  - Phase 4 (Execution): service-specific MCPs (preferred over CLI), CLI fallbacks, browser tools, DB tools
+- **Orchestrator directly** (no agent spawn):
+  1. **Skills**: Extract available skills from system-reminder context
+  2. **Agents**: Extract available agent types from Agent tool description
+- **Delegate to Explore agent** (combine with Step 1 if triggered, or spawn separately):
+  3. **MCP servers**: Run `mcp-find` + scan `~/.claude/settings.json` for `mcpServers`. Include chrome-devtools-mcp in inventory if available.
+  4. **CLIs**: External service detection + probe common tools (`which curl`, `which jq`, `which ngrok`, `which uvx`)
+- **Compile Tool Inventory**: Per-phase recommendations (Safety: health-check CLIs; Discovery: Explore+Grep/Glob; Plan: skills/agents; Execution: service MCPs, CLI fallbacks, browser tools, DB tools, chrome-devtools-mcp)
 
-**CLAUDE.md deep scan**: `find . -maxdepth 3 -name "CLAUDE.md" -type f 2>/dev/null` + `~/.claude/CLAUDE.md` + `.claude/CLAUDE.md`. Cache list. Delegate reading to Explore agent.
+**CLAUDE.md deep scan** (Phase 0 + Phase 2): `find . -maxdepth 3 -name "CLAUDE.md" -type f` + `~/.claude/CLAUDE.md` + `.claude/CLAUDE.md`. Cache list for capabilities scan, auto-extract, Phase 2 enrichment, Feature Context Document.
 
-**Step 2: Docker Context Detection** — `docker context ls`. Prefer `docker-desktop` (switch if needed). Store in `swarm.dockerContext`.
-
-**Step 3: Config Validation** — `test -f .claude/autonomous-tests.json`.
-
-Schema: base → `autonomous-tests/references/config-schema.json`; swarm → `references/config-schema-swarm.json`.
-
-**Config hash method**: `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"`
+**Step 2: Config Check** — `test -f .claude/autonomous-tests.json && echo "CONFIG_EXISTS" || echo "CONFIG_MISSING"`. Schema: `references/config-schema-swarm.json` (extends base `../autonomous-tests/references/config-schema.json`).
 
 ### If `CONFIG_EXISTS` (returning run):
-
-1. Read config
-2. **Validate version**: require `version: 5` with `project`, `database`, `testing`. v4→v5: move `*Cli` fields to `externalServices[].cli`. v3→v4→v5: add empty `capabilities` first. < v3: warn, re-run first-run. Ensure `documentation.fixResults` defaults to `"docs/_autonomous/fix-results"` if missing.
-3. **Verify trust**: compute hash via **Config hash method**. Check trust store (`~/.claude/trusted-configs/{project-hash}.sha256`). Mismatch → show config (redact `testCredentials` as `"********"`) → `AskUserQuestion` → write hash on approval.
-4. **Testing priorities**: show current, `AskUserQuestion` for updates. New → replace. "None" → `[]`. Cascade via Feature Context Document.
-5. Re-scan services, update config if needed
-6. Update `lastRun` via `date -u +"%Y-%m-%dT%H:%M:%SZ"`
-7. If `userContext` empty, run User Context Questionnaire
-8. If `swarm` section missing, run Swarm Configuration Questionnaire
-9. If config modified, re-stamp trust via **Config hash method**
-10. Skip to Phase 1
-
-### Swarm Configuration Questionnaire (when `swarm` absent):
-
-1. **Detect mode**: compose files found → `"compose"`, Docker without compose → `"raw-docker"`. Confirm with user.
-2. **Compose mode**: parse compose → extract services, ports → `portMappings`
-3. **Env file detection**: parse `env_file:` directives → `swarm.envFiles` (`source: "compose-env_file"`). Scan dirs for `.env`/`.env.local` → `source: "auto-detected"`. Detect port variables: value matches `containerPort` + name has `PORT` → `type: "direct"`; value has `localhost:{port}` → `type: "url"`. Present via `AskUserQuestion`. Store confirmed mappings.
-4. **Raw Docker mode**: ask for images, ports, env vars → `rawDockerServices`
-5. Ask initialization commands
-6. Per related project: detect mode (compose/raw-docker/npm-dev with `startCommand`, `projectPath`, `envOverrides`)
-7. Max parallel agents (default: 5)
-8. Resource limits (opt-in): `memory`, `cpus`, `readOnlyRootfs` + `tmpfsMounts`
-9. Save and re-stamp trust
-
-No `credentialType` questions — each agent creates its own test data.
+1. Read config.
+2. **Version validation**: require `version: 6` + fields `project`, `database`, `testing`, `swarm`. v5->v6: add `frontendType: "none"`, `chromeDevtools: false`, `e2eUrl: null`, `browserPreference: "agent-browser"`, add `logFile: null` to services, add `logCommand: null` to relatedProjects, add `frontendIndicators`, bump to 6. v4->v5->v6: chain migrations. <4 or missing fields -> warn, re-run first-run.
+   - Missing `database.seedStrategy` -> default `"autonomous"`, inform user.
+   - Missing `documentation.fixResults` -> add `"docs/_autonomous/fix-results"`.
+   - Missing `swarm` -> run Swarm Configuration Questionnaire.
+3. **Config trust**: Compute hash using **Config hash method**. Check trust store `~/.claude/trusted-configs/{project-hash}.sha256`. Mismatch -> show config (redact `testCredentials` values as `"********"`) -> `AskUserQuestion` for approval -> write hash.
+4. **Testing priorities**: Show `userContext.testingPriorities`. `AskUserQuestion`: "Pain points or priorities?" with "None" option. Update config.
+5. **Re-scan services**: Delegate to Explore agent. Update config if needed.
+6. `date -u +"%Y-%m-%dT%H:%M:%SZ"` -> update `lastRun`.
+7. Empty `userContext` -> run questionnaire, save.
+8. **Re-stamp trust**: if config modified -> recompute hash, write to trust store.
+9. Skip to Phase 1.
 
 ### If `CONFIG_MISSING` (first run):
+Spawn **Explore agent** for auto-extraction:
+1. **Auto-extract** from CLAUDE.md files + compose + env + package manifests. Detect migration/cleanup/seed commands. Detect DB type (MongoDB vs SQL). Both found -> ask user.
+2. **Topology**: `single` | `monorepo` | `multi-repo`.
+3. **Related projects**: scan sibling dirs, grep for external paths -> ask user per candidate -> populate `relatedProjects`.
 
-Delegate auto-extract to Explore agent:
-1. **Auto-extract** from CLAUDE.md files + compose + env + manifests. Detect `seedCommand`, `migrationCommand`, `cleanupCommand`. **Database type detection**: MongoDB indicators (`mongosh`, `mongoose`/`mongodb`/`@typegoose`, `mongodb://` URIs, mongo containers) vs SQL indicators (`psql`/`mysql`/`sqlite3`, ORM packages, `postgres://`/`mysql://` URIs, SQL containers). Both found → ask user.
-2. **Topology**: `single`, `monorepo` (workspace configs, multiple package.json, conventional dirs), `multi-repo` (cross-references, sibling `.git`, shared networking)
-3. **Related projects**: scan siblings, grep CLAUDE.md/compose for external paths. Confirm each with user.
-4. **Capabilities scan** — run Step 1
-5. **User Context Questionnaire**: flaky areas? priorities? notes? (No credential questions.)
-6. **Swarm Configuration Questionnaire**
-7. Propose config → wait for approval → write
-8. Stamp trust via **Config hash method**
-9. If CLAUDE.md < 140 lines and lacks startup instructions, append max 10 lines
+Agent reports. Orchestrator proceeds:
+4. **Capabilities scan** — delegate (Step 1).
+5. **Seeding strategy** via `AskUserQuestion`: autonomous (recommended) or command.
+6. **Swarm Configuration Questionnaire** via `AskUserQuestion`: `maxAgents` (default 3), `portRangeStart` (default 9000), `dockerContext` (auto-detected), `containerPrefix`, compose vs raw-docker mode. Validate Docker context exists and port range is available.
+7. **User Context Questionnaire**: flaky areas? credentials (env var/role names only)? priorities? notes? -> store in `userContext`.
+8. **Propose config** -> STOP for confirmation -> write.
+9. **Stamp trust**: compute hash -> write to trust store.
+10. If CLAUDE.md < 140 lines and lacks startup instructions -> append max 10 lines.
 
-## Phase 1 — Safety & Environment
+## Phase 1 — Safety, Environment & Log Monitoring
 
-Single objective: verify safe, reserve ports, validate Docker.
+**Objective**: Verify the environment is safe, start services, reserve ports, and begin per-agent log capture.
 
-Spawn ONE general-purpose subagent (foreground). Agent performs:
-
+Spawn ONE **general-purpose subagent** (foreground) to perform:
 1. **Production scan**: `.env` files for `productionIndicators`, `*LIVE*SECRET*`, `NODE_ENV=production`, production DB endpoints, non-local URLs. Show variable NAME only.
-2. Run `sandboxCheck` commands from config
-3. Verify Docker is local
-4. **Related project safety scan**: For each `relatedProjects[]` entry with a `path`:
-   - Scan `.env` files in the related project path for the same production indicators (`productionIndicators`, `*LIVE*SECRET*`, `NODE_ENV=production`, production DB endpoints, non-local URLs)
-   - Show variable NAME + related project name if found
-   - Any production indicator in a related project triggers the same **ABORT** gate as the main project
-5. Verify Docker context matches `swarm.dockerContext` (switch if needed)
-6. Create `/tmp/autonomous-swarm-{sessionId}` (`date -u +%Y%m%d%H%M%S` for sessionId)
-7. Scan port ranges from `swarm.portRangeStart` per agent via `ss -tlnp`/`netstat -tlnp` or socket test. Skip conflicts.
-8. Reserve and store assignments
-9. Validate: compose → `docker compose -f {file} config --quiet`; raw Docker → `docker image inspect || docker pull`; disk space → `docker system df`
-10. If `swarm.audit.enabled` (default true): `mkdir -p .../audit/`, write `session.json` (`schemaVersion: "1.0"`, sessionId, timestamp, branch, scope, agent count, limits)
+2. Run `sandboxCheck` commands from config.
+3. Verify Docker is local. Validate `swarm.dockerContext` exists: `docker context inspect {dockerContext}`.
+4. **Port reservation**: Verify port range `portRangeStart` to `portRangeStart + (maxAgents * portStep)` is free. `lsof -i :{port}` or `ss -tlnp` per port. Conflict -> warn + suggest alternative range.
+5. **Related project safety scan**: For each `relatedProjects[]` with a `path`, scan `.env` files for production indicators. Any production indicator -> **ABORT**.
+6. **Service startup**: per service in config + related projects with `startCommand`: health check -> healthy: `already-running` -> unhealthy: start + poll 5s/30s -> `started-this-run` or report failure.
+7. Start webhook listeners.
+8. **Log monitoring setup**: After services are healthy, start log capture per `../autonomous-tests/references/log-monitoring-protocol.md` (Swarm Variant):
+   - Per-agent log paths at `/tmp/autonomous-swarm-{sessionId}/agent-{N}/logs/`
+   - Create base directory structure for all agents
+   - Record log file paths and PIDs in Service Readiness Report
+9. **Service Readiness Report**: per service — name, URL/port, health status, health check endpoint, source, log file path, log capture PID, assigned port range per agent.
 
-Agent reports: safety assessment, port assignments, validation results, audit status.
-
-Orchestrator: **ABORT** if production detected. Keep port assignments for Phase 3.
+Agent reports: safety assessment + Service Readiness Report with log paths. Gates: **ABORT** if production. **STOP** if unhealthy.
 
 ## Phase 2 — Discovery
 
-Fully autonomous — derive from code diff, codebase, or guided source. Never ask user what to test.
+Fully autonomous — derive from code diff, codebase, or guided source. Never ask what to test.
 
-Spawn ONE Explore agent (`subagent_type: "Explore"`, thoroughness: `"medium"`).
+**Delegation**: ONE Explore agent (`subagent_type: "Explore"`, thoroughness: `"medium"`).
 
 ### Standard mode
-
-1. Get changed files from git (include `relatedProjects[].path` for cross-project tracing)
-2. If `file:<path>` provided, read `.md` → extract features, criteria, endpoints, edge cases
-3. Spawn Explore agent with: changed files, file reference content, `relatedProjects[]`, `testing.contextFiles`, CLAUDE.md paths, `documentation.*` paths. Agent performs:
-   - **Feature map**: endpoints, DB operations (MongoDB: `find`/`aggregate`/`insertMany`/`updateOne`/`deleteMany`/`bulkWrite`/`createIndex`, schema changes; SQL: `SELECT`/`INSERT`/`UPDATE`/`DELETE`/`JOIN`/`GROUP BY`/`CREATE TABLE`/`ALTER TABLE`/`CREATE INDEX`, migrations, ORM ops), external services, business logic, auth flows, signal chains
-   - **Dependency graph**: callers → changed code → callees, across files and projects
-   - **Smart doc analysis**: (a) match paths/features/endpoints against `docs/` tree, (b) `_autonomous/` scan — Summary + Issues Found only, extract prior failures/bugs, (c) fix completion scan — `Status: RESOLVED` + `Verification: PASS` → regression targets, `Ready for Re-test: YES` → priority re-test
+1. Changed files from git (scope args) — include `relatedProjects[].path` for cross-project deps.
+2. If `file:<path>` -> read `.md`, extract features/criteria/endpoints/edge cases.
+3. **Spawn Explore agent** with: changed files, file reference content, `relatedProjects[]`, `testing.contextFiles`, CLAUDE.md paths, `documentation.*` paths. Agent performs:
+   - **Feature map**: API endpoints, DB ops, external services, business logic, auth flows, signal/event chains
+   - **Dependency graph**: callers -> changed code -> callees, cross-file/project imports
+   - **Smart doc analysis**: match paths/features against `docs/`, scan `_autonomous/` (Summary + Issues Found only), fix completion scan
    - **Edge case inventory**: error handlers, validation branches, race conditions, retry logic
-   - **Cross-project seed map**: For each `relatedProjects[]`, trace which collections/tables in the related project's database are read by the main project's E2E flows (shared users, linked entities, cross-service references). Per dependency: related project name, collection/table, required fields, relationship to main project data, connection command from `relatedProjects[].database.connectionCommand` or inferred from config.
-   - **Test flow classification**: Classify each test scenario as `autonomous/api` (API-only, no UI), `autonomous/ui` (browser automation needed), `guided/webapp` (user performs actions in web browser), or `guided/mobile` (user performs actions on physical mobile device). For related projects with `relationship: "mobile"`, trace user flows → classify as `guided/mobile`.
-   - **Related project log commands**: Discover log commands per `relatedProjects[]` entry — from `logCommand` field, or inferred from `startCommand`/compose config. Record for post-test log verification.
-4. Receive agent report
+   - **Cross-project seed map**: For each `relatedProjects[]`, trace which collections/tables are read by E2E flows
+   - **Test flow classification**: Classify each scenario as `integration/api`, `e2e/webapp`, `e2e/mobile`, `guided/webapp`, `guided/mobile`. Project type influences: if `frontendType` is `webapp` -> `e2e/webapp`; if `mobile` -> `e2e/mobile`; if `api-only` -> only `integration/api`.
+   - **Security checklist mapping**: Read `../autonomous-tests/references/security-checklist.md`. Map each of 17 items to YES/NO/PARTIAL per discovered feature.
+   - **Data seeding analysis**: Read `../autonomous-tests/references/data-seeding-protocol.md`. Analyze DB schema and models. Return seed plan with table names, field names, example values, create/cleanup commands.
+   - **Related project log commands**: Discover log commands per `relatedProjects[]`.
+4. Receive structured report.
 
-### Guided mode (user augmentation — single agent)
-
-**Validate**: `guided` + `staged`/`unstaged`/`N`/`working-tree` → STOP with error message. Combinable with `rescan` only.
-
-1. **Resolve source**: `guided file:<path>` → doc-based; `guided "description"` → description-based; `guided` alone → `AskUserQuestion` (pick doc or describe)
-2. Spawn Explore agent with guided source + mode type + same context as standard. Agent performs deep feature analysis (keywords → Glob/Grep → read → trace imports) plus same feature map, dependency, doc analysis, edge case work. Agent also identifies: DB seed requirements per test, external service setup needs, prerequisite state for each happy-path workflow.
-3. Receive report. Orchestrator extracts only happy-path workflows — discard security, edge case, validation, race condition findings (those are autonomous-only).
+### Guided mode (user augmentation)
+**Validate first**: `guided` + `staged`/`unstaged`/`N`/`working-tree` -> STOP with combinability error.
+1. **Resolve source**: `guided file:<path>` -> doc-based | `guided "desc"` -> description-based | `guided` alone -> `AskUserQuestion`.
+2. **Spawn Explore agent** with same inputs. Agent performs: deep feature analysis + same feature map/dependency/doc analysis/edge cases. Also identifies: DB seed requirements, external service setup needs, prerequisite state per happy-path workflow.
+3. Receive report. Orchestrator extracts only happy-path workflows — discard security, edge case, validation findings.
 
 ### Regression Scope Analysis (conditional — after Explore report)
-
-Check the Explore agent's report for re-test indicators:
-- Fix-results entries with `Ready for Re-test: YES`
-- Pending-fixes entries with `### Resolution` → `Status: RESOLVED` + `Verification: PASS`
-
-**If NEITHER found** → skip, compile normal Feature Context Document below.
-
-**If FOUND** → Regression mode. Orchestrator compiles from the Explore report (no additional agent — this is a filtering/cross-referencing operation on data already gathered):
-
-1. **Fix manifest**: per resolved item — ID, title, files modified, what was done, source path, original test IDs, verification details. V-prefix: add OWASP + attack vector.
-2. **1-hop impact zone**: from the Explore agent's dependency graph, extract only direct callers and direct callees of each modified file. Discard beyond 1-hop.
-3. **Prior test mapping**: cross-reference `Source` paths and `Original Test IDs` against test-results to identify which suites and test IDs originally failed. If `Original Test IDs` absent (legacy fix-results), fall back to parsing `Source` path → open pending-fixes → extract `Test ID`.
-4. **Prior pass mapping**: from the same test-results docs, extract suites/tests that PASSED — these are candidates for exclusion.
-5. **Blast radius check**: if modified files' combined 1-hop zone covers >60% of the feature map → fall back to full Feature Context Document, note "blast radius exceeds regression threshold — running full scope."
-
-Compile **Targeted Regression Context Document** (replaces Feature Context Document for Phase 3):
-- Regression mode header (type, fix-results source path, original test-results path, fix date, item count)
-- Fix manifest (per item: ID, title, files modified, description, original test IDs, 1-hop callers/callees)
-- Regression test scope: Required tests (verify fix scenarios + 1-hop impact) and Excluded areas (unaffected suites from original run, with reason)
-- Prior passing tests summary (context for agents — avoid re-testing)
-- Environment/capabilities (same as Feature Context Document)
+Check for re-test indicators (`Ready for Re-test: YES`, `Status: RESOLVED` + `Verification: PASS`). If found -> compile **Targeted Regression Context Document** (fix manifest, 1-hop impact zone, original test IDs, blast radius check >60% -> full scope).
 
 ### Feature Context Document (standard/guided modes — skipped in regression mode)
+Compile from Explore report (do NOT re-read files). Contents: features, endpoints, DB collections/tables, cross-project seed map, test flow classifications, security checklist applicability map, data seeding plan, log file paths from Service Readiness Report, related project log commands, external services, edge cases, test history, capabilities, **swarm port mappings and Docker stack configuration**. Guided mode adds `Mode` + `Source` at top. Cascaded to every Phase 4 agent.
 
-Compile from agent report (do NOT re-read analyzed files). Contains: features, endpoints, DB tables/collections, cross-project seed map (related project DB dependencies with collection/table, required fields, connection commands), test flow classifications, related project log commands, external services, edge cases, prior history, capabilities. Guided mode adds `Mode:` and `Source:` at top. Cascaded to all agents in Phase 4.
+### Post-Discovery Prompts (standard mode only — skip if `guided` or regression)
+Single `AskUserQuestion`:
+- **Guided Happy Path** — After all autonomous tests, generate guided test plan where user performs actions while agent verifies. Happy-path only. Include? (yes/no)
 
-### Live E2E Eligibility Analysis (standard mode only — skip in guided and regression)
-
-After the Feature Context Document is compiled, the orchestrator cross-references features with capabilities to determine which external services are both available and relevant to the code being tested:
-
-1. **Extract external service usage from feature map**: Collect all external services referenced by the changed code (webhook handlers, API calls, storage operations). Each entry: service name, operations used, code paths.
-2. **Cross-reference with capabilities**: For each service in the feature map, check `externalServices[]` in config:
-   - `cli.available && !cli.blocked` → **eligible** (available in sandbox)
-   - `cli.available && cli.blocked` → **blocked** (production keys detected)
-   - `!cli.available` → **unavailable** (CLI not installed)
-   - Also check `capabilities.dockerMcps[]` for relevant sandbox MCPs
-3. **Compile eligibility list**: Per eligible service: name, mode, relevant `allowedOperations` matching the feature map, applicable MCP tools. Only services that are both available and relevant to the changed code appear.
-3.5. **Test clock detection**: For each eligible service with `testClockSupport` in the external services catalog, check the feature map against `testClockSupport.triggerKeywords`. If any keyword matches → set `testClockRequired: true` on the eligibility entry. Note: CLI required for clock operations per catalog `requiredCli`; MCP used for complementary operations per catalog `mcpOperations`.
-4. **Store**: `liveE2eEligibility: { eligible: [...], blocked: [...], unavailable: [...] }` — carried to prompts and Phase 3.
-
-### Post-Discovery Prompts (standard mode only — skip if `guided` arg present or regression mode)
-
-After Feature Context Document and Live E2E Eligibility Analysis, prompt the user before entering plan mode. Use a single `AskUserQuestion` to reduce friction:
-
-```
-Based on the discovered features, I have two optional additions:
-
-{IF liveE2eEligibility.eligible is non-empty}
-1. **Live E2E Testing** — The changed code interacts with external services available in sandbox mode:
-{for each eligible service}
-   - {service.name} ({service.mode}): {comma-separated relevant allowedOperations[].command}
-{end for}
-   These run after the standard autonomous tests, using real CLI/MCP calls. Each service requires your approval again at runtime before any CLI call.
-   → Include live E2E suites? (yes/no)
-{ELSE}
-1. **Live E2E Testing** — No external services are both available and relevant to the changed code. Skipping.
-{END IF}
-
-2. **Guided Happy Path** — After all autonomous tests, I can generate a guided test plan where you perform actions on your device/browser while I verify results via DB/API/logs. Happy-path workflows only.
-   → Include guided happy-path section? (yes/no)
-
-Reply with your choices (e.g., "yes to both", "live e2e yes, guided no", "no to both").
-```
-
-Parse response into two boolean decisions:
-- `liveE2eApproved` (forced `false` if eligibility list was empty)
-- `guidedHappyPathApproved`
-
-If eligibility list is empty AND `guided` arg present → skip prompt entirely.
+Parse response into `guidedHappyPathApproved` boolean.
 
 ## Phase 3 — Plan (Plan Mode)
 
-**Enter plan mode.** Plan starts with:
+**Enter plan mode (/plan).** Plan starts with:
 
-**Step 0 — Context Reload**: re-read SKILL.md, config, templates (`autonomous-tests/references/templates.md`). Restore: resolved `$ARGUMENTS`, branch, commit range, Phase 2 findings, `userContext`, swarm config, port assignments, init commands, related project map. If regression mode: fix manifest, 1-hop impact zone, original test IDs, Targeted Regression Context Document. If guided: type, source, and full guided test list with per-test seed requirements.
-- If live E2E approved: eligibility list (per-service: name, mode, relevant operations, MCP tools), user approval status
-- If guided happy path approved: list of happy-path workflows from Feature Context Document with per-test seed requirements, user instructions, verification queries
+**Step 0 — Context Reload** (for post-approval reconstruction):
+- Re-read: SKILL.md, config, `../autonomous-tests/references/templates.md`
+- Scope: `$ARGUMENTS`, branch, commit range
+- Findings: Phase 2 discoveries (modules, endpoints, dependencies, test flow classifications)
+- User context: flaky areas, priorities, notes
+- Service Readiness Report from Phase 1 (including log file paths, port assignments)
+- Swarm config: `maxAgents`, `portRangeStart`, `portStep`, `dockerContext`, compose paths
+- If regression mode: fix manifest, 1-hop impact zone, original test IDs, Targeted Regression Context Document
+- If guided: type, source, full guided test list with per-test seed requirements
+- If guided happy path approved: happy-path workflows with seed requirements, user instructions, verification queries
 
-**Tool loading gate**: If autonomous mode needs agent-browser/Playwright, list tools and prompt user via AskUserQuestion before plan approval. Declined tools excluded from plan. Guided mode: NEVER include browser automation tools — skip this gate entirely.
+**Tool loading gate**: If autonomous mode needs agent-browser/Playwright, list tools and prompt user via AskUserQuestion before plan approval. Declined tools excluded from plan. Guided mode: NEVER include browser automation tools — skip this gate.
 
 **Self-containment mandate** — the plan MUST embed directly (not reference "above" or prior phases):
 1. All test suites with full details (name, objective, pre-conditions, steps, expected outcomes, teardown, verification)
 2. Feature Context Document (condensed but complete)
-3. Service Readiness Report from Phase 1 (port assignments, health status)
-4. Per-suite agent spawn instructions with resolved values (swarm-{N} spec, ports, Docker context, compose path, capabilities snapshot, Feature Context Document)
+3. Service Readiness Report from Phase 1 (including log file paths, capture PIDs, port assignments)
+4. Per-suite agent spawn instructions with resolved values, port mappings, and Docker stack config
 5. Config paths: `documentation.*`, `database.connectionCommand`, `testing.unitTestCommand`, `testDataPrefix`
-6. Swarm config: port assignments, init commands, related project map
-7. If guided: per-test DB seed commands, user-facing step-by-step instructions, and verification queries
-8. Seed schema discovery mandate (embedded verbatim for Phase 4 suite agents)
-9. If live E2E approved: Live E2E Decision block — per-service: name, mode, relevant `allowedOperations`, applicable MCP tools, `userPromptTemplate` for runtime CLI gate. If `testClockRequired`: embed Test Clock sub-protocol (resolved from catalog `testClockSupport`). Embedded verbatim so post-reset orchestrator can prompt and execute.
-10. If guided happy path approved: Guided Happy Path Decision block — per-test: name, objective, prerequisites, step-by-step user instructions, DB seed commands, verification queries, expected outcomes.
-11. Documentation checklist (always embedded, never conditional) — the post-reset orchestrator needs this to know what files to generate after testing. Include: output directories from config (`documentation.*` paths), template reference path (`references/templates.md`), filename convention (`{timestamp}_{semantic-name}.md`, timestamp from `date -u`), and which doc types this run produces. At minimum: test-results doc. Conditionally: pending-fixes (if failures/findings exist), pending-guided-tests (if guided tests identified or approved), pending-autonomous-tests (if tests queued but not run). Without this embedded checklist, the orchestrator has no way to know about doc generation after context reset — which is why it gets skipped.
-12. Tool Inventory from Phase 0 — full inventory with per-phase recommendations so subagents know which tools are available without re-scanning.
-13. DB Consistency Check Protocol from `autonomous-tests/references/db-consistency-protocol.md` — embedded verbatim so agents execute inline checks without needing the reference file post-reset.
+6. Credential role names from `testCredentials`
+7. If guided: per-test DB seed commands, user-facing instructions, verification queries
+8. Seed schema discovery mandate (embedded verbatim) per `../autonomous-tests/references/data-seeding-protocol.md`
+9. If guided happy path approved: Guided Happy Path Decision block
+10. Documentation checklist (always — output directories, template path, filename convention, doc types this run produces)
+11. Tool Inventory from Phase 0
+12. DB Consistency Check Protocol from `../autonomous-tests/references/db-consistency-protocol.md`
+13. Security checklist applicability map (which of the 17 items apply to which features)
+14. Explicit data seeding plan (tables, fields, values, curl/DB commands)
+15. Log file paths from Service Readiness Report
+16. Chrome DevTools protocol (if available) from `../autonomous-tests/references/chrome-devtools-protocol.md`
+17. Service startup commands for all project + relatedProject services
+18. Execution protocols from `references/execution-protocols-swarm.md` — embed relevant protocols verbatim
+19. Suite agent tasks from `references/swarm-agent-tasks.md` — embed lifecycle tasks verbatim
 
-- Execution Protocol — autonomous mode (embed verbatim — orchestrator uses this after context reset):
-  ```
-  SETUP: Spawn general-purpose subagent (foreground). Creates agent dirs, generates modified compose/docker scripts with remapped ports, copies+remaps env files, validates configs, freezes capabilities snapshot, applies resource limits + Docker labels, reads source files, returns specs.
-  TOOL CONTEXT: Suite agents receive relevant Tool Inventory subset (service MCPs, CLI fallbacks, browser tools, DB tools) in their prompts.
-  SCHEMA GATE: Every suite agent MUST complete seed schema discovery (query real doc or read service code) BEFORE any database write. Proceeding without schema analysis is PROHIBITED.
-  DB CONSISTENCY: Per-agent inline checks. Each agent captures dbBaseline before seeding, runs POST_SEED/POST_TEST/POST_CLEANUP against its namespaced DB. Results returned with suite PASS/FAIL. Protocol embedded in plan.
-  FLOW: PARALLEL — background subagents:
-    1. Set Docker context
-    2. Confirm port ranges
-    3. Spawn ALL suite subagents simultaneously (run_in_background: true)
-    4. Each receives in prompt: pre-generated specs (swarm-{N}, ports, Docker context, compose path), frozen capabilities, Feature Context Document
-    5. All subagents execute in parallel — orchestrator notified on completion
-  LIVE E2E (conditional): Sequential only. Execute if plan contains liveE2eApproved: true. Follow live E2E execution protocol.
-  GUIDED HAPPY PATH (conditional): Sequential only. Execute if plan contains guidedHappyPathApproved: true. Follow guided happy path execution protocol.
-  DOCUMENTATION: Follow documentation execution protocol. Generate all applicable doc types. Runs even on all-pass results.
-  FAILURE: Spawn replacement background subagent for failed suite
-  POST-COMPLETION: Spawn foreground subagent for Docker cleanup + audit merge + temp dir removal
-  ```
+### Test Plan Structure
 
-- Execution Protocol — guided mode (embed verbatim):
-  ```
-  MODE: User augmentation
-  NO BROWSER AUTOMATION: agent-browser and Playwright MUST NOT be loaded
-  NO PARALLEL SUBAGENTS: Guided mode overrides parallel protocol. One foreground subagent at a time, sequential.
-  TOOL CONTEXT: Seeding/verification agents receive DB + service tool subset from Tool Inventory.
-  CATEGORIES: Happy-path workflows ONLY
-  FLOW: For each guided test (in order):
-    1. Spawn ONE general-purpose subagent (foreground) for DB seeding + external service setup
-    2. Subagent seeds database, configures services, returns readiness status
-    3. Orchestrator presents steps via AskUserQuestion tool (MANDATORY — text output PROHIBITED):
-       Question: "## Guided Test: {test-name}\n\n**Setup complete**: {seeds/services summary}\n\n**Steps**:\n1. {step}\n2. {step}\n...\n\n**What to verify**: {expected outcomes}"
-       Options: ["Done - ready to verify", "Skip this test", "Issue encountered"]
-       - "Done" → spawn verification subagent
-       - "Skip" → record SKIP, proceed to next test
-       - "Issue" → follow-up AskUserQuestion for issue description, record as finding
-    4. User performs actions on real device/browser
-    5. Orchestrator verifies results via DB queries/API/logs
-    6. Record PASS/FAIL → next test
-  PROHIBITED: agent-browser, Playwright, parallel subagents, security/edge-case/validation tests
-  ```
+```
+## Test Plan
 
-- Execution Protocol — live E2E mode (embed verbatim — conditional, only if liveE2eApproved):
-  ```
-  RUNS AFTER: All parallel autonomous suites complete.
-  SEQUENTIAL ONLY: Live E2E does not use swarm Docker isolation — it runs against the shared local stack, one subagent at a time. External services shouldn't receive concurrent conflicting requests.
-  SERVICES: {embedded per-service details from Live E2E Decision block}
-  TOOL CONTEXT: Agents receive target service's MCP tools (preferred) + CLI (fallback) from Tool Inventory.
-  FLOW: Sequential — one subagent at a time:
-    1. For each live E2E suite:
-       a. CLI gate: AskUserQuestion per service using embedded userPromptTemplate (once per service, not per suite)
-       b. Declined → skip that service's suites, mark "skipped — user declined at runtime"
-       c. Approved → cli.approvedThisRun: true
-       d. Sandbox check: agent re-runs modeDetection.command before first CLI call. If production detected → abort live E2E for that service (keys may have changed since Phase 0).
-       e. Spawn ONE general-purpose subagent (foreground) with full context + CLI details + allowed/prohibited operations
-       f. Record PASS/FAIL → next suite
-  TEST CLOCK SUB-PROTOCOL (conditional — only when testClockRequired on service):
-    All operations resolved from `testClockSupport` in external-services-catalog.json.
-    1. Create clock via catalog `cliOperations` (frozen at start time)
-    2. Create entities attached to clock via catalog `mcpOperations` (preferred) or CLI
-    3. Set up recurring lifecycle scenario per feature map
-    4. Advance clock to future time via catalog `cliOperations`
-    5. Verify state changes via catalog `mcpOperations`
-    6. Verify expected events received per `triggerKeywords`
-    7. Repeat steps 4-6 for additional time scenarios per test plan
-    8. Cleanup: delete clock via catalog `cliOperations` — ALWAYS execute, even on failure (wrap in finally/trap)
-    NOTE: See catalog `testClockSupport` for exact CLI commands and MCP operations.
-  ```
+### Integration Test Suites (curl-based) — PARALLEL EXECUTION
+Categories 1-8 per ../autonomous-tests/references/test-taxonomy.md. Each suite includes:
+- Explicit curl commands with expected responses (remapped ports per agent)
+- Security checklist items applicable to this suite (YES/PARTIAL only)
+- Data seeding commands (what to create before, what to clean after)
+- Per-agent log file paths
+- Docker stack assignment (swarm-{N}, ports, compose path)
 
-- Execution Protocol — guided happy path mode (embed verbatim — conditional, only if guidedHappyPathApproved):
-  ```
-  RUNS AFTER: All autonomous suites AND live E2E suites (if any). Guided runs last because it requires the user's active participation — pausing autonomous work mid-flow would be disruptive.
-  SEQUENTIAL ONLY: Overrides parallel protocol — one foreground subagent at a time.
-  NO BROWSER AUTOMATION: The user performs all actions. agent-browser and Playwright are not loaded.
-  CATEGORIES: Happy-path workflows only (category 1). Edge cases, security, and validation are autonomous-only — they don't benefit from manual execution.
-  FLOW: For each guided test:
-    1. Spawn ONE general-purpose subagent (foreground) for DB seeding + service setup
-    2. Subagent seeds database (seed schema discovery mandate), returns readiness
-    3. Orchestrator presents steps via AskUserQuestion tool (MANDATORY — text output PROHIBITED):
-       Question: "## Guided Test: {test-name}\n\n**Setup complete**: {seeds/services summary}\n\n**Steps**:\n1. {step}\n2. {step}\n...\n\n**What to verify**: {expected outcomes}"
-       Options: ["Done - ready to verify", "Skip this test", "Issue encountered"]
-       - "Done" → spawn verification subagent
-       - "Skip" → record SKIP, proceed to next test
-       - "Issue" → follow-up AskUserQuestion for issue description, record as finding
-    4. User performs actions on real device/browser
-    5. Orchestrator spawns verification subagent — DB/API/log checks
-    6. Record PASS/FAIL → next test
-  ```
+### E2E Test Suites (browser-based) — SEQUENTIAL EXECUTION
+Only if frontendType != api-only. Runs against shared local stack (NOT swarm-isolated).
+For webapp: agent-browser flows with chrome-devtools-mcp observations
+For mobile: guided steps with verification commands
 
-- Execution Protocol — documentation (embed verbatim — always present, never conditional):
-  ```
-  RUNS AFTER: All test phases (autonomous + live E2E + guided) complete.
-  WHY THIS EXISTS IN THE PLAN: After context reset, Phase 5 instructions in the SKILL.md are no longer in context. Without this block, the orchestrator completes suites and stops — no docs get written. This block ensures doc generation happens.
-  WHAT TO GENERATE:
-    - test-results doc (always — even if every test passed, the record matters for regression tracking and audit trails)
-    - pending-fixes doc (when any test failed or findings were reported)
-    - pending-guided-tests doc (when guided tests were identified or guidedHappyPathApproved)
-    - pending-autonomous-tests doc (when tests were identified but not executed)
-  HOW:
-    1. Spawn general-purpose subagent (foreground)
-    2. Read references/templates.md for structure
-    3. Get timestamp: date -u +"%Y-%m-%d-%H-%M-%S"
-    4. Filename: {timestamp}_{semantic-name}.md
-    5. Write to directories from the documentation checklist embedded in this plan
-    6. Include ALL results: autonomous + live E2E (if run) + guided (if run)
-  ```
+### Regression (unit tests — runs LAST)
+Single testing.unitTestCommand execution after all suites complete.
+```
 
-**Test categories** — standard (autonomous): all 9. Guided mode (both sub-modes): category 1 ONLY. Categories 2-9 never in guided. Non-happy-path findings queued as pending-autonomous-tests.
+**Regression mode scoping**: When Targeted Regression Context Document is present:
+- Suite 1 "Fix Verification": one test per fixed item — re-execute original failure scenario
+- Suite 2 "Impact Zone" (conditional): tests for 1-hop callers/callees
+- No other suites. Execution protocol unchanged.
 
-1. **Happy path** — normal flows end-to-end
-2. **Invalid inputs & validation** — malformed data, missing fields, wrong types, boundaries
-3. **Duplicate/idempotent requests** — rapid repeats, verify no duplicates
-4. **Error handling** — every error branch in diff
-5. **Unexpected DB changes** — orphans, missing refs, unintended mutations, slow queries
-6. **Race conditions & timing** — concurrent writes, out-of-order webhooks, expired tokens
-7. **Security** — injection, XSS/CSRF, auth bypass, data exposure, compliance
-8. **Edge cases from code** — every branch/catch/guard/fallback covered
-9. **Regression** — existing tests + re-verify broken flows
+**Wait for user approval.**
 
-Per-agent setup: each uses pre-generated compose/docker commands, starts stack, runs init, executes suites. Failure redistribution: failed agent's suites reassigned to healthy agent.
+## Phase 4 — Execution (Subagents)
 
-Each suite: name, objective, pre-conditions, steps + expected outcomes, teardown, verification queries.
+Spawn subagents per the execution protocols in `references/execution-protocols-swarm.md`. Each agent follows the lifecycle in `references/swarm-agent-tasks.md`.
 
-**Regression mode scoping**: When the plan receives a Targeted Regression Context Document:
-- Suite 1 "Fix Verification" (always): one test per fixed item — re-execute the exact original failure scenario using original test IDs as reference
-- Suite 2 "Impact Zone" (conditional): tests for 1-hop callers/callees — only categories where modified code is relevant (e.g., validation fix → Category 2; auth fix → Categories 4, 7; DB fix → Category 5). Skip categories with no code path overlap.
-- No other suites — unaffected areas excluded
-- State in plan: "Targeted regression re-test — scope limited to fix verification and 1-hop impact zone"
-- Execution protocol: unchanged (same subagent parallel flow, just fewer suites)
-- **Swarm efficiency note**: If regression scope produces <=2 suites, swarm Docker isolation overhead may exceed the benefit. The plan should note this but still execute as configured.
+### 1. Service Restoration Agent (fg, FIRST)
+Context reset kills background processes. Re-establish services and log captures:
+1. Run `healthCheck` per service — healthy -> `verified-post-reset` — unhealthy -> `startCommand` + poll 5s/30s
+2. Related projects: same check via `relatedProjects[]`
+3. Start webhook listeners
+4. **Re-start log captures** per `../autonomous-tests/references/log-monitoring-protocol.md` (Swarm Variant) for all services
+5. Recreate per-agent directories at `/tmp/autonomous-swarm-{sessionId}/agent-{N}/logs/`
+6. **Gate**: any `failed-post-reset` -> **STOP**
+7. Return updated Service Readiness Report with new log file paths and PIDs
 
-**Wait for approval.**
+### 2. Setup Agent (fg)
+Read source files, compile Feature Context Documents, read CLAUDE.md files. Generate per-agent specs (swarm-{N}, remapped ports, compose paths). Freeze capabilities snapshot for distribution. Proceeds after completion.
 
-## Phase 4 — Execution (Agent Swarm)
+### 3. Integration Suite Agents (bg, PARALLEL — up to maxAgents concurrent)
+Each agent spawned with `run_in_background: true`. Each receives:
+- Pre-generated spec (swarm-{N}, ports, compose path)
+- Frozen capabilities snapshot
+- Feature Context Document with remapped curl commands
+- Security checklist subset (YES/PARTIAL items only)
+- Data seeding instructions per `../autonomous-tests/references/data-seeding-protocol.md`
+- Per-agent log paths at `/tmp/autonomous-swarm-{sessionId}/agent-{N}/logs/`
+- DB consistency protocol, credential role name, Tool Inventory subset
 
-Spawn `general-purpose` subagents (one per suite or grouped). All parallel via `run_in_background: true`. Results returned directly to orchestrator.
+Each agent executes lifecycle tasks a-l from `references/swarm-agent-tasks.md` within its isolated Docker stack. Failure -> redistribute to replacement background subagent.
 
-**Cascading context**: every agent gets full Feature Context Document from Phase 2.
+Orchestrator waits for ALL parallel agents to complete, then performs audit merge per `references/execution-protocols-swarm.md` (Audit Merge Protocol).
 
-**Capability-aware execution (autonomous mode ONLY)**: `agent-browser` first for UI if available → Playwright fallback → `mcp-add` safe MCPs → **External CLI gate**: prompt user once per service via `AskUserQuestion`, approved → `allowedOperations` only, declined → mark as "guided". Never use `safe: false` MCPs or `cli.blocked` CLIs.
+### 4. E2E Suite Agents (fg, SEQUENTIAL — one at a time)
+Only if `frontendType` != `api-only`. Runs against shared local stack (NOT swarm-isolated).
+Each agent receives: user journey steps, browser config, chrome-devtools protocol (if `chromeDevtools: true`), log paths, Service Readiness Report, Feature Context Document, Tool Inventory subset.
 
-**Guided mode execution**: No browser automation. No parallel agents. User performs all UI interactions. Swarm Docker isolation NOT used in guided mode — tests run against shared local stack.
+**Webapp**: Navigate with `agent-browser` -> snapshot -> execute journey -> re-snapshot + devtools check -> verify backend via curl -> verify DB.
+**Mobile**: Present guided steps via `AskUserQuestion` -> user acts -> verify via curl/DB/logs.
 
-**Anomaly detection**: duplicate records, unexpected DB changes, warning/error logs, slow queries, orphaned refs, auth anomalies, response anomalies. **Finding verification mandatory** — read source to confirm. Unconfirmed → `Severity: Unverified` in `### Unverified` subsection.
+Browser tool priority (skipping without attempting is PROHIBITED):
+1. `agent-browser` (PRIMARY) — `open <url>` -> `snapshot -i` -> `click/fill @ref` -> re-snapshot
+2. Playwright (FALLBACK) — if agent-browser unavailable/errors
+3. Direct HTTP/API (LAST RESORT) — mark untestable parts as "guided"
 
-**API Response Security Inspection**: exposed IDs, leaked credentials, PII, compliance. **Source verification mandatory** — read model/serializer/DTO definitions. Synthetic data findings are false positives.
+Reports back: PASS/FAIL per step, screenshots, network/console findings, backend verification, logs.
 
-**Setup agent (MANDATORY)** — spawn first (general-purpose subagent, foreground):
-1. Create `/tmp/autonomous-swarm-{sessionId}/agent-{N}/` per agent
-2. Generate modified compose files / docker run scripts — remapped ports, namespaced names, related project files
-3. npm-dev services: copy projects, set up `node_modules` per `nodeModulesStrategy` (`symlink` default → `ln -s`, `hardlink` → `cp -al` with `cp -r` fallback, `copy` → `cp -r`)
-4. Copy + remap env files: `direct` → regex replace port, `url` → replace `localhost:ORIGINAL_PORT`. Preserve comments/prefixes/non-matching vars. Update compose `env_file:` paths.
-5. npm-dev env remapping: apply `swarm.envPortMappings` to `.env`/`.env.local` in copies
-6. Validate compose configs
-7. Freeze capabilities snapshot — distributed verbatim, agents must NOT re-scan
-8. Inject resource limits if configured (compose: `mem_limit`/`cpus`/`read_only`/`tmpfs`; raw: `--memory`/`--cpus`/`--read-only`/`--tmpfs`)
-9. Apply Docker labels: `com.autonomous-swarm.managed=true`, `.session={sessionId}`, `.agent={N}`
-10. Read key source files for context
-11. Return validated specs + Feature Context Document
+### 5. Guided Happy-Path (fg, optional, if user approved)
+Runs LAST — after autonomous suites. No browser automation. Category 1 only. Swarm isolation NOT used — shared local stack.
+For each test: seed DB -> present steps via `AskUserQuestion` (MANDATORY — text output PROHIBITED) with options `["Done - ready to verify", "Skip this test", "Issue encountered"]` -> user acts -> verify via DB/API/logs -> PASS/FAIL.
 
-Orchestrator receives setup results, then spawns suite subagents with pre-generated specs.
+### 6. Regression Agent (fg, LAST)
+Run `testing.unitTestCommand` once. Report total/passed/failed/skipped. Never interleaved with other suites.
 
-**Suite agent tasks (a-l)**:
-- **a. Spec**: project name `swarm-{N}`, ports, Docker context, compose path
-- **b. Capabilities**: frozen snapshot only
-- **c. Compose setup**: verify + `docker compose -p swarm-{N} -f ... up -d`
-- **d. Raw Docker setup**: `docker run -d --name swarm-{N}-{service} ...`, create/connect network `swarm-{N}-net`
-- **e. npm-dev setup**: `rsync` project (exclude node_modules/.next/dist/.turbo), set up node_modules, resolve env overrides (`{port}`/`{backendPort}`), start in background (capture PID), remap env files
-- **f. Health check**: poll remapped ports, 60s timeout, 2 attempts → report failure for redistribution
-- **g. Init**: run `swarm.initialization.commands` with namespace resolution. Wait `waitAfterStartSeconds`. Related project init.
-- **h. DB seeding**: adapted `migrationCommand`, `seedCommand`, `connectionCommand`, `cleanupCommand` with `swarm-{N}` namespace. Capture `dbBaseline` via `connectionCommand` before seeding. **Seed schema analysis gate** (MANDATORY — before ANY database write): Agents must complete schema analysis and report discovered schemas BEFORE executing any insert/seed operation. Proceeding without schema analysis is PROHIBITED. **Seed schema discovery** (mandatory for autonomous seeding — applies to ALL databases in the E2E flow, including related projects): Before inserting into ANY collection/table: (1) query for a real document/row (`findOne`/`SELECT * LIMIT 1` without test prefix filter) to use as schema template, (2) if empty, read the backend service code that creates documents in that collection (look for `insertOne`/`find_one_and_update`/`INSERT`/ORM create calls), (3) mirror the discovered schema exactly — never invent fields or change types (ObjectId vs string, Date vs string, etc.), (4) only add `_testPrefix` marker as extra field, (5) for related project collections: use the connection command from `relatedProjects[]` config or the cross-project seed map in the Feature Context Document. After all seeds (main + related): hit the API read endpoints (via the agent's remapped ports) to verify serialization before proceeding to test execution.
-- **h2. DB consistency: POST_SEED** — execute POST_SEED checks against agent's namespaced DB. Compare current counts to `dbBaseline` + expected seed counts.
-- **i. Execute**: test suites against agent's API (remapped ports)
-- **i2. DB consistency: POST_TEST** — execute POST_TEST checks against agent's namespaced DB. Compare against `dbBaseline` for mutation audit.
-- **j. Report**: PASS/FAIL + anomalies returned to orchestrator
-- **k. Audit** (when enabled): `agent-{N}.json` → `schemaVersion: "1.0"`, agentId, suites, environment, timeline (`{ timestamp, action, target, result }`), configuredLimits (no `docker stats`), teardown status, duration
-- **l. Teardown (ALWAYS)**: (1) Remove `testDataPrefix` data, (2) DB consistency: POST_CLEANUP — execute POST_CLEANUP checks (cleanup completeness, pre-existing preservation, structural integrity), (3) compose `down -v --remove-orphans` / raw docker stop+rm+network rm / npm-dev kill PIDs / remove agent temp dir / verify no lingering containers
-
-**Execution flow**:
-1. Set Docker context
-2. Confirm port ranges
-3. Spawn all suite subagents (`run_in_background: true`) with pre-generated specs in prompt
-4. All parallel — orchestrator notified on completion
-5. **Failure redistribution**: failed subagent's suites → spawn replacement background subagent. Failed subagent tears down.
-6. **Live E2E suites (conditional — only if plan contains liveE2eApproved: true)**:
-   - Runs after all parallel autonomous suites complete and results are recorded
-   - Does not use swarm Docker isolation — runs against the shared local stack
-   - CLI gate: per service, AskUserQuestion using embedded userPromptTemplate. Declined → skip. Approved → cli.approvedThisRun: true.
-   - Sandbox re-verification before first CLI call. Production detected → abort for that service.
-   - Sequential: one foreground subagent per suite, full context including CLI details and allowed/prohibited operations
-   - Record PASS/FAIL, check related project logs
-7. **Guided happy-path tests (conditional — only if plan contains guidedHappyPathApproved: true)**:
-   - Runs last — after autonomous and live E2E (if any)
-   - Overrides parallel protocol — one foreground subagent at a time
-   - For each test: seed DB → present steps via AskUserQuestion (MANDATORY — text output PROHIBITED) with options ["Done", "Skip", "Issue"] → user acts → verify via DB/API/logs → PASS/FAIL
-   - No browser automation. No parallel agents. Category 1 only.
-8. Post-completion Docker cleanup verification (spawn foreground subagent):
-   - Name-based: `docker ps -a --filter name=swarm- -q` → empty
-   - Label-based: `docker ps -a --filter label=com.autonomous-swarm.session={sessionId} -q` → empty
-   - Networks: `docker network ls --filter label=...session={sessionId} -q` → empty
-   - Volumes: `docker volume ls --filter label=...session={sessionId} -q` → empty
-   - Clean orphans if any
-9. Merge audit logs (when enabled) → `audit-summary.json` (`schemaVersion: "1.0"`, metadata, per-agent, totals, cleanup verification)
-10. `rm -rf /tmp/autonomous-swarm-{sessionId}`
+### Critical Execution Rules
+- Never create batch scripts — each test explicitly passed to subagent
+- Explicit data seeding instructions (table, fields, values, commands) — never guess
+- Each subagent receives applicable security checklist items only
+- Each subagent receives per-agent log file paths to check after execution
+- Orchestrator checks logs between suites and after parallel completion
+- **Credential assignment**: Rotate role names from `testCredentials` across suites — pass role name only, never values
+- **Finding verification** (mandatory): identify source code -> read to confirm -> distinguish real vs agent-created -> report only confirmed. Unconfirmed -> `Severity: Unverified` in `### Unverified`
+- **Anomaly detection**: duplicate records, unexpected DB changes, warning/error logs, slow queries, orphaned references, auth anomalies, unexpected response fields/status codes
+- Integration suites: PARALLEL (`run_in_background: true`), up to `maxAgents` concurrent
+- E2E suites: SEQUENTIAL (fg, one at a time) — browser automation cannot parallelize
+- Guided mode overrides to SEQUENTIAL for all suites (no parallel execution)
 
 ## Phase 5 — Results & Docs
 
-### Fix cycle
-- **Runtime-fixable** (env var, container, stuck job): before attempting any fix, verify the issue is real — re-read error output, check if transient (retry once), confirm root cause in logs/config. Only fix after confirming genuine issue. Fix → re-run → max 3 cycles.
-- **Code bug**: document (file, line, expected vs actual) → ask user
+**Fix cycle**: Runtime-fixable issues -> verify real (re-read error, retry once, confirm root cause) -> spawn subagent to fix -> re-run suite -> max 3 cycles. Code bug -> document + ask user.
 
-### Documentation
-Delegate to agent. Dirs from config. Timestamp via `date -u +"%Y-%m-%d-%H-%M-%S"`. Pattern: `{timestamp}_{semantic-name}.md`. Read `autonomous-tests/references/templates.md` for structure.
+**Audit merge**: If not done in Phase 4, merge all parallel agent results per `references/execution-protocols-swarm.md` (Audit Merge Protocol). Consolidate findings, security observations, DB consistency, log findings across all agents.
 
-Doc types: **test-results** (always generated — the record is essential for regression tracking even when all tests pass), **pending-fixes** (bugs/infra), **pending-guided-tests** (browser/visual/device + guided happy-path tests if approved), **pending-autonomous-tests** (identified but not run). If live E2E or guided happy-path tests were executed, include their results in the test-results doc under dedicated suite sections. The documentation subagent receives all test results (autonomous + live E2E + guided) and generates unified output. If any DB consistency check returned WARN or FAIL, include `### DB Consistency` subsection in test-results with per-agent results per the template.
+**Documentation**: Spawn subagent (foreground). Timestamp via `date -u +"%Y-%m-%d-%H-%M-%S"`. Pattern: `{timestamp}_{semantic-name}.md`. Read `../autonomous-tests/references/templates.md`. Four doc types: test-results (always — rename header to "Test Results"), pending-fixes (bugs/infra), pending-guided-tests (browser/visual/physical), pending-autonomous-tests (identified but not run). Include service log analysis, DB consistency results (if WARN/FAIL). When audit enabled -> append "Execution Audit" section (agent count, durations, limits, cleanup). Include ALL results from autonomous + guided phases.
 
-When `swarm.audit.enabled`: append "Execution Audit" section (agent count, durations, limits, totals, cleanup, audit JSON path). Only orchestrator copies `audit-summary.json` to `docs/_autonomous/test-results/`. Re-runs: append "Re-run" section.
+**Docker cleanup verification**: Spawn subagent (foreground) per `references/execution-protocols-swarm.md` (Docker Cleanup Verification):
+1. Verify no lingering swarm containers, networks, or volumes
+2. Clean orphans if any remain
+3. Remove `/tmp/autonomous-swarm-{sessionId}/`
 
-### Final cleanup
-- Docker verification: same checks as Phase 4 step 6. Clean orphans.
-- Verify `/tmp/autonomous-swarm-{sessionId}` removed
-- Test data: remove by `testDataPrefix`. Never touch pre-existing data. Log + verify.
+**Cleanup**: Remove `testDataPrefix` data only. Never touch pre-existing. Kill log capture processes. Verify cleanup. Log actions.
+
+**DB consistency final check**: Run POST_CLEANUP verification. Zero test records must remain.
 
 ## Phase 6 — Finalize
 
-> **Important**: Run `/clear` before invoking another skill to free context and prevent stale state.
+> **Important**: Run `/clear` before invoking another skill (e.g., `/autonomous-fixes`) to free context window tokens and prevent stale state from interfering with the next operation.
 
 ---
 
 ## Rules
 
-| Rule | Scope |
+| Rule | Detail |
 |---|---|
-| No production data/connections | All |
-| No credentials in output | All |
-| Plan mode before execution | Phase 3 |
-| Delegate via subagents | Phases 4-5 |
+| No production | Never modify production data or connect to production services |
+| No credentials in output | Never expose credentials, keys, tokens, or env var values — pass role names only |
+| Plan before execution | Phase 3 plan mode required before any test execution |
+| Subagents only | All execution via Agent(). Main-conversation execution PROHIBITED |
 | Model inheritance | Subagents inherit from main conversation — ensure Opus is set |
-| No unsafe MCPs (`safe: false`) | Phase 4 |
-| External CLI: per-run confirmation, `allowedOperations` only | Phase 4 |
-| Idempotent test data | Phase 4 |
-| Always tear down, even on failure | Phase 4 |
-| Never bind used ports | Phases 1, 4 |
-| Never modify original compose/env — copies in `/tmp/` | Phase 4 |
-| Namespace isolation: `docker compose -p` | Phase 4 |
-| `--remove-orphans -v` in teardown | Phase 4 |
-| Max 2 compose attempts before redistribute | Phase 4 |
-| Never init against shared stack | Phase 4 |
-| Docker Desktop context priority | Phases 0-1 |
-| All temp files in `/tmp/` | All |
-| npm-dev in copies only | Phase 4 |
-| Clean `/tmp/autonomous-swarm-{sessionId}/` always | Phase 5 |
-| Explore agents read-only | Phase 2 |
-| Finding verification mandatory | Phase 4 |
-| Resource limits when configured | Phase 4 |
-| Docker labels hardcoded: `com.autonomous-swarm.*` | Phase 4 |
-| Capabilities freeze in suite agents | Phase 4 |
-| Audit logs when enabled | Phases 4-5 |
-| Only orchestrator writes `docs/_autonomous/` | Phase 5 |
+| Integration = parallel | Integration suites run in PARALLEL via `run_in_background: true`, up to `maxAgents` concurrent |
+| E2E = sequential | E2E suites run ONE at a time — browser automation cannot parallelize |
+| Guided = all sequential | Guided mode overrides parallel — all suites sequential |
+| Isolated Docker stacks | Each parallel agent gets its own Docker stack with remapped ports and namespaced containers |
+| Port cleanup mandatory | All swarm ports must be freed after execution — no lingering binds |
+| Docker cleanup mandatory | All swarm containers, networks, volumes removed after execution — no orphans |
+| Explore agents read-only | No file edits or state-modifying commands |
+| UTC timestamps | Via `date -u` only, never guess |
+| No unsafe MCPs | Never activate `safe: false` MCPs |
+| External CLI gating | Blocked when `cli.blocked`. Per-run user confirmation. `allowedOperations` only |
+| No dynamic commands | Only execute verbatim config commands — no generation/concatenation/interpolation |
+| Integration tests = curl | Always `curl` — never mock, never script-based test runners |
+| E2E tests = browser | `agent-browser` (primary) or Playwright (fallback) — never test production |
+| Unit tests = regression | Run ONCE at the end — never during integration/E2E suites |
+| Data seeding = explicit | Never guess field names, values, or schemas. Seed schema discovery mandatory |
+| Each test = one subagent | Never batch scripts — each test passed individually to subagent |
+| Service logs monitored | Log capture active during all test phases. Check between suites |
+| Finding verification | Verify against source code before reporting any finding |
+| Idempotent test data | Prefix with `testDataPrefix`. Skip or reset if exists |
+| External API care | Delays between calls, sandbox modes, minimize requests |
+| `_autonomous/` reading | Summary + Issues Found sections only |
+| Capabilities auto-detected | Never ask user to configure manually |
 | Guided = user augmentation | No browser automation in guided mode — user performs all actions |
-| Guided = happy path only | Category 1 only in guided mode — categories 2-9 autonomous-only |
+| Guided = happy path only | Category 1 only in guided mode — categories 2-8 autonomous-only |
 | Tool loading gate | Browser tools need pre-plan approval in autonomous mode, never in guided |
 | Plan self-containment | All context embedded in plan for post-reset survival — no "see above" references |
-| Guided = single subagent | Override parallel protocol — one foreground subagent at a time in guided mode |
-| Seed schema discovery | Before seeding any DB (main or related project): query real doc or read service code for schema. Mirror exactly — never invent fields or change types. Verify via API after seeding |
-| Live E2E = sandbox only | Live E2E suites require sandbox/test mode. Re-verified at runtime before CLI calls |
-| Live E2E = post-autonomous | Live E2E runs after all autonomous (mocked) suites complete |
-| Guided happy path = post-all | Guided happy-path runs last — after autonomous and live E2E |
+| Guided happy path = post-all | Guided happy-path runs last — after all autonomous suites |
 | Post-discovery prompts | Standard mode only — skipped when `guided` arg or regression mode active |
-| Documentation in every run | Test-results doc generated for every run. Embedded in plan execution protocol so it survives context reset |
-| DB consistency inline | POST_SEED, POST_TEST, POST_CLEANUP checks within Phase 4 per agent. Baseline before first DB write. Results in test-results |
+| Documentation in every run | Test-results doc generated for every run. Embedded in plan execution protocol |
+| DB consistency inline | POST_SEED, POST_TEST, POST_CLEANUP checks within Phase 4 per suite |
+| Audit merge before docs | Parallel results merged before documentation phase |
 
 ## Operational Bounds
 
-- **Max agents**: suites + 1 setup, capped at `swarm.maxAgents + 1` (default 6)
-- **Max fix cycles**: 3 per suite
-- **Health check**: 60s timeout, 2 attempts
-- **Capability cache**: `rescanThresholdDays` (default 7)
-- **Commands**: only user-approved config commands — no dynamic generation
-- **Docker**: local only, Phase 1 aborts on production. Namespaced `swarm-{N}`, original compose untouched.
-- **Credentials**: N/A — each agent seeds own data
-- **MCPs**: only `safe: true` activated
-- **Subagents**: spawn → Docker → execute → teardown → return results. No persistent agents.
-- **External CLIs**: `allowedOperations` only, per-run confirmation, blocked when `cli.blocked`. `prohibitedFlags`/`prohibitedOperations` always blocked.
-- **System commands**: `which`, `docker compose ps`/`context ls`/`system df`, `docker ps -a --filter label=`, `docker network/volume ls --filter label=`, `git branch`/`diff`/`log`, `test -f`, `find . -maxdepth 3 -name "CLAUDE.md"`, `date -u`, `ss -tlnp`/`netstat -tlnp`, `curl -sf` localhost, `python3 -c` (json/hashlib/re), `cp -al`. `setup-hook.sh` modifies settings once at install only.
-- **Downloads**: Docker images from project compose/config only. Playwright browsers if present. No other runtime downloads.
-- **Data access**: outside project: `~/.claude/settings.json` (read), `~/.claude/trusted-configs/{hash}.sha256` (read/write), `~/.claude/CLAUDE.md` (read). CLAUDE.md 3 levels deep (read). `.env` scanned for patterns only — values never stored/logged/output. Modified files only in `/tmp/`.
-- **Resource limits**: compose `mem_limit`/`cpus`/`read_only`/`tmpfs`, raw Docker `--memory`/`--cpus`/`--read-only`/`--tmpfs`. Non-null only. Per-container. Audit records configured, not runtime.
-- **Labels**: `com.autonomous-swarm.managed=true`, `.session=`, `.agent=`. Hardcoded. Secondary cleanup verification.
-- **Capabilities freeze**: setup agent snapshot → verbatim to suite agents. No re-scan.
-- **Audit**: when enabled, agents write `agent-{N}.json` to `/tmp/.../audit/`, orchestrator merges to `audit-summary.json` (all `schemaVersion: "1.0"`). Only orchestrator copies to `docs/_autonomous/`.
-- **Explore agents**: one per Phase 2. Read-only.
-- **Trust**: config SHA-256 vs out-of-repo trust store. Untrusted inputs → analysis → Feature Context Document → plan → user approval via ExitPlanMode. No untrusted content in shell commands.
-- **Live E2E scope**: Eligible services only (cli.available && !cli.blocked && feature-relevant). allowedOperations only. Runtime sandbox re-verification. Does not use swarm Docker isolation.
-- **Guided happy path scope**: Category 1 only. No browser automation. Sequential (overrides parallel protocol). Runs last.
-- **Post-discovery prompts**: Standard mode only — skipped for `guided` arg or regression mode.
-- **Documentation output**: Minimum 1 doc (test-results) per run. Embedded in execution protocol for post-reset survival.
+| Bound | Constraint |
+|---|---|
+| Max parallel agents | `swarm.maxAgents` (default 5) |
+| Max agents total | Approved test suites + service restoration + setup + regression |
+| Max fix cycles | 3 per suite |
+| Health check timeout | 30s per service (60s for swarm stacks) |
+| Capability cache | `rescanThresholdDays` (default 7 days) |
+| Command scope | User-approved config commands only |
+| Docker scope | Local only — Phase 1 aborts on production indicators |
+| Docker context | `swarm.dockerContext` validated in Phase 1 |
+| Port range | `portRangeStart` to `portRangeStart + (maxAgents * portStep)` — validated free |
+| Credential scope | Env var references only — raw values forbidden, redacted on display |
+| MCP scope | `safe: true` only |
+| Subagent lifecycle | Integration: parallel bg. E2E/guided/regression: one fg at a time |
+| Explore agent scope | One per Phase 2. Read-only |
+| External CLI scope | `allowedOperations` only. Per-run confirmation. Blocked when `cli.blocked` |
+| System commands | `which`, `docker compose ps`, `docker context inspect/show`, `git branch`/`diff`/`log`, `test -f`, `find . -maxdepth 3 -name "CLAUDE.md" -type f`, `date -u`, `curl -sf` localhost, `python3 -c` json/hashlib, `lsof`/`ss` for port checks |
+| External downloads | Docker images via user's compose only. Playwright browsers if present. No other downloads |
+| Data access | Outside project: `~/.claude/settings.json` (RO), `~/.claude/trusted-configs/` (RW), `~/.claude/CLAUDE.md` (RO). `.env` scanned for patterns only |
+| Trust boundaries | Config SHA-256 verified out-of-repo. Untrusted inputs -> analysis only -> plan -> user approval |
+| Guided happy path scope | Category 1 only. No browser automation. Sequential. Runs last |
+| Documentation output | Minimum 1 doc (test-results) per run. Embedded in execution protocol for post-reset survival |
+| Temp directory | `/tmp/autonomous-swarm-{sessionId}/` — removed in Phase 5 cleanup |

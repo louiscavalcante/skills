@@ -75,10 +75,11 @@ Print resolved scope, then proceed without waiting.
 
 **Step 1 — Config Validation**: This skill reuses `.claude/autonomous-tests.json`.
 1. `test -f .claude/autonomous-tests.json` → if missing, **STOP**: "Run `/autonomous-tests` first."
-2. Read config. Validate `version` equals `5`.
+2. Read config. Validate `version` equals `6`. If `version` is `5` -> auto-migrate: add `logFile: null` to each `project.services[]`, add `logCommand: null` to each `relatedProjects[]`, add `frontendType: "none"`, `chromeDevtools: false`, `e2eUrl: null`, `browserPreference: "agent-browser"`, add `frontendIndicators`, remove deprecated `liveE2eEligibility` and `credentialType` fields, bump to `6`.
 3. Verify config trust: compute hash via **Config hash method**, check against `~/.claude/trusted-configs/`. If untrusted → show config (redact `testCredentials`), confirm via `AskUserQuestion`.
 4. Ensure `documentation.fixResults` exists → if missing, add `"fixResults": "docs/_autonomous/fix-results"`, save.
-5. If config modified in step 4 → re-stamp trust using **Config hash method**.
+5. **Extract log file paths**: If services are running, collect log file paths from `project.services[].logFile` and log commands from `relatedProjects[].logCommand`. Store as **Log Path Inventory** for Phase 3 fix agents.
+6. If config modified in step 4 or 5 → re-stamp trust using **Config hash method**.
 
 **Step 2 — CLAUDE.md Deep Scan**: Delegate to Explore agent. Scan CLAUDE.md files up to 3 levels deep, plus `~/.claude/CLAUDE.md` and `.claude/CLAUDE.md`. Return discovered file list. Cache for Phase 2.
 
@@ -134,11 +135,16 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
 6. CLAUDE.md file list from Phase 0 Step 2
 7. Tool Inventory from Phase 0 — full inventory with per-phase recommendations so fix agents know which tools are available without re-scanning.
 8. DB Consistency Check Protocol (POST_FIX section only) from `autonomous-tests/references/db-consistency-protocol.md` — embedded verbatim so fix agents execute inline checks without needing the reference file post-reset.
+9. Log Path Inventory from Phase 0 Step 5 — service log file paths and related project log commands so fix agents can check logs after fix verification.
+10. Security checklist items (from `../autonomous-tests/references/security-checklist.md`) applicable to V-prefix items — embedded per finding so fix agents verify security compliance without needing the reference file post-reset.
+11. Service startup commands for all project + relatedProject services — so fix agents can restart services after applying fixes if needed.
 
 - Execution Protocol (embed verbatim — orchestrator uses this after context reset):
   ```
   SETUP: Spawn general-purpose subagent (foreground). Reads source files referenced by findings, compiles Fix Context Documents, reads CLAUDE.md files, returns results.
   TOOL CONTEXT: Fix agents receive relevant Tool Inventory subset (service MCPs, CLI tools, DB tools, testing tools) in their prompts.
+  LOG CONTEXT: Fix agents receive Log Path Inventory (service log files, related project log commands) and service startup commands.
+  SECURITY CONTEXT: V-prefix fix agents receive applicable security checklist items (from 17-item checklist) embedded in their Fix Context Document.
   DB CONSISTENCY: Fix agents that modify DB-interacting code capture pre-fix record counts, then run POST_FIX check after fix application. Non-DB fixes skip this step.
   FLOW: STRICTLY SEQUENTIAL — one subagent at a time:
     1. For each selected item (in order):
@@ -173,7 +179,7 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
 4. Identify root cause — state explicitly
 5. Design fix — concrete steps with file:line references
 
-**V-prefix enhanced context**: Trace full I/O path for affected handler. Identify ALL user-controlled inputs reaching vulnerable code. Check related patterns in same file/module. Assess regulatory exposure. Design security-aware remediation: DTO filtering, validation/sanitization layers, rate limiting, protective guards.
+**V-prefix enhanced context**: Trace full I/O path for affected handler. Identify ALL user-controlled inputs reaching vulnerable code. Check related patterns in same file/module. Assess regulatory exposure. Design security-aware remediation: DTO filtering, validation/sanitization layers, rate limiting, protective guards. Read `../autonomous-tests/references/security-checklist.md` (17-item checklist) and embed the items relevant to each V-prefix finding into its Fix Context Document — highlight which items the vulnerability violates and which the fix must satisfy.
 
 Execution is **STRICTLY SEQUENTIAL** — one agent at a time.
 
@@ -185,7 +191,7 @@ Execution is **STRICTLY SEQUENTIAL** — one agent at a time.
 
 Spawn general-purpose subagents sequentially (foreground). For each selected item (in order):
 1. Spawn ONE general-purpose subagent (foreground)
-2. Provide in prompt: Fix Context Document, source paths, fix instructions, verification steps
+2. Provide in prompt: Fix Context Document, source paths, fix instructions, verification steps, service startup commands (so agent can restart services if needed after fix), Log Path Inventory from Phase 0 (so agent can check logs for errors after fix verification). For V-prefix items: include applicable security checklist items from `../autonomous-tests/references/security-checklist.md` (the items the vulnerability violates and the fix must satisfy).
 3. BLOCK — foreground = automatic blocking
 4. Receive results directly
 5. Next item
@@ -196,9 +202,10 @@ Spawn general-purpose subagents sequentially (foreground). For each selected ite
 3. Implement fix targeting root cause
 4. Run unit tests if configured (`testing.unitTestCommand`)
 5. Verify with targeted checks (API calls, DB queries, log inspection)
-6. **DB consistency: POST_FIX** — if fix touched DB-interacting code, capture pre-fix record counts, apply fix, then verify no unintended writes, schema intact, no orphans introduced. Skip for non-DB fixes.
-7. Report: RESOLVED / PARTIAL / UNABLE with details
-8. Record `Original Test IDs` from source finding's `Test ID` field into fix-results documentation
+6. **Log check**: After fix verification, check log files from Log Path Inventory for new errors or warnings introduced by the fix. If service requires restart, use startup commands from config.
+7. **DB consistency: POST_FIX** — if fix touched DB-interacting code, capture pre-fix record counts, apply fix, then verify no unintended writes, schema intact, no orphans introduced. Skip for non-DB fixes.
+8. Report: RESOLVED / PARTIAL / UNABLE with details (include log check results)
+9. Record `Original Test IDs` from source finding's `Test ID` field into fix-results documentation
 
 **V-prefix additional instructions**:
 1. Enforce DTO/serializer filtering — remove sensitive data from responses
@@ -209,6 +216,7 @@ Spawn general-purpose subagents sequentially (foreground). For each selected ite
 6. Verify no new attack vectors introduced
 7. Check same pattern in related files/endpoints
 8. Test with variant attack payloads
+9. **Security checklist verification**: Confirm all applicable security checklist items (from Fix Context Document) are satisfied by the fix. Report per-item pass/fail in results.
 
 Never fix in main conversation — always delegate.
 

@@ -6,20 +6,20 @@ Reference file for Phase 7 documentation. Follow these structures exactly when g
 
 ---
 
-## `docs/_autonomous/test-results/{YYYY-MM-DD-HH-MM-SS}_{feature-name}-e2e-results.md`
+## `docs/_autonomous/test-results/{YYYY-MM-DD-HH-MM-SS}_{feature-name}-test-results.md`
 
 ```markdown
-# E2E Test Results: {Feature Name}
+# Test Results: {Feature Name}
 
 - **Date**: {YYYY-MM-DD HH:MM:SS UTC}
 - **Branch**: {branch}
 - **Commits tested**: `{short-sha}` ({summary}) [+ more if multiple]
 - **Environment**: Local ({services list with versions/modes})
-- **Prior E2E run**: `{path}` ({date}, {summary}) [omit if first run]
+- **Prior test run**: `{path}` ({date}, {summary}) [omit if first run]
 - **Capabilities**: {list of capabilities used} [omit if none]
 - **File reference**: `{path}` [omit if none]
 - **Prior history**: {count} related docs found in _autonomous/ [omit if none]
-- **Test Flow**: {autonomous/api | autonomous/ui | guided/webapp | guided/mobile}
+- **Test Flow**: {integration/api | e2e/webapp | e2e/mobile | guided/webapp | guided/mobile}
 
 ## Summary
 
@@ -38,6 +38,16 @@ Reference file for Phase 7 documentation. Follow these structures exactly when g
 | 1.2 | {what was tested} | {expected outcome} | {actual outcome} | **FAIL** |
 
 **Related Project Logs**: {clean | errors found — see details below}
+
+### Service Log Analysis
+| Service | Log File | Errors | Warnings | Status |
+|---------|----------|--------|----------|--------|
+| {name} | `{path}` | {count} | {count} | {clean/issues found} |
+
+### Chrome DevTools Observations
+| Suite | Network Issues | Console Errors | Screenshots |
+|-------|---------------|----------------|-------------|
+| {name} | {count} | {count} | {paths} |
 
 ---
 
@@ -206,7 +216,7 @@ These tests require browser interaction, visual verification, or real user actio
 
 - **Date**: {YYYY-MM-DD HH:MM:SS UTC}
 - **Branch**: {branch}
-- **Related E2E**: `docs/_autonomous/test-results/{timestamp}_{feature-name}-e2e-results.md`
+- **Related Test Results**: `docs/_autonomous/test-results/{timestamp}_{feature-name}-test-results.md`
 
 ---
 
@@ -282,7 +292,7 @@ Tests that can be fully automated but were not run in this session (queued for a
 
 - **Date**: {YYYY-MM-DD HH:MM:SS UTC}
 - **Branch**: {branch}
-- **Related E2E**: `docs/_autonomous/test-results/{timestamp}_{feature-name}-e2e-results.md`
+- **Related Test Results**: `docs/_autonomous/test-results/{timestamp}_{feature-name}-test-results.md`
 - **Reason queued**: {Why these weren't run — e.g., dependency not ready, time constraint, scope excluded}
 
 ---
@@ -327,7 +337,7 @@ Tests that can be fully automated but were not run in this session (queued for a
 - {Services that must be running}
 ```
 
-**Rules**: Same structure conventions as other templates. `---` between tests. Number sequentially (`## Test 1:`, `## Test 2:`). Always include `### Teardown` per test. Always end with `## Automation Notes` section. Cross-reference the related E2E run that generated these. Never expose credentials.
+**Rules**: Same structure conventions as other templates. `---` between tests. Number sequentially (`## Test 1:`, `## Test 2:`). Always include `### Teardown` per test. Always end with `## Automation Notes` section. Cross-reference the related test run that generated these. Never expose credentials.
 
 ---
 

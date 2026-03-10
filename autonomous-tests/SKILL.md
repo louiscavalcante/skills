@@ -1,7 +1,6 @@
 ---
 name: autonomous-tests
-description: 'Run autonomous E2E tests. Args: staged | unstaged | N (last N commits) | working-tree
-  | file:<path> | rescan | guided [description] (default: working-tree with smart doc analysis). Example: /autonomous-tests guided "payment checkout flow"'
+description: 'Run autonomous tests (integration via curl + E2E via browser). Args: staged | unstaged | N | working-tree | file:<path> | rescan | guided [description]'
 argument-hint: 'staged | unstaged | N | working-tree | file:<path> | rescan | guided'
 disable-model-invocation: true
 allowed-tools: Bash(*), Read(*), Write(*), Edit(*), Glob(*), Grep(*), Agent(*),
@@ -27,11 +26,20 @@ hooks:
 - Commits: !`git log --oneline -5 2>/dev/null`
 - Docker: !`docker compose ps 2>/dev/null | head -10 || echo "No docker-compose found"`
 - Config: !`test -f .claude/autonomous-tests.json && echo "YES" || echo "NO -- first run"`
-- Capabilities: !`python3 -c "import json;c=json.load(open('.claude/autonomous-tests.json'));caps=c.get('capabilities',{});mcps=len(caps.get('dockerMcps',[]));ab='Y' if caps.get('frontendTesting',{}).get('agentBrowser') else 'N';pw='Y' if caps.get('frontendTesting',{}).get('playwright') else 'N';ec=sum(1 for s in c.get('externalServices',[]) if s.get('cli',{}).get('available'));print(f'MCPs:{mcps} agent-browser:{ab} playwright:{pw} ext-clis:{ec} scanned:{caps.get(\"lastScanned\",\"never\")}')" 2>/dev/null || echo "NOT SCANNED"`
+- Capabilities: !`python3 -c "import json;c=json.load(open('.claude/autonomous-tests.json'));caps=c.get('capabilities',{});mcps=len(caps.get('dockerMcps',[]));ab='Y' if caps.get('frontendTesting',{}).get('agentBrowser') else 'N';pw='Y' if caps.get('frontendTesting',{}).get('playwright') else 'N';cd='Y' if caps.get('frontendTesting',{}).get('chromeDevtools') else 'N';ec=sum(1 for s in c.get('externalServices',[]) if s.get('cli',{}).get('available'));print(f'MCPs:{mcps} agent-browser:{ab} playwright:{pw} chrome-devtools:{cd} ext-clis:{ec} scanned:{caps.get(\"lastScanned\",\"never\")}')" 2>/dev/null || echo "NOT SCANNED"`
 
 ## Role
 
-Project-agnostic autonomous E2E test runner. Exercise features against the live LOCAL stack, verify state at every step, produce documentation, never touch production.
+Project-agnostic autonomous test runner. Analyzes code changes, auto-detects project capabilities, generates comprehensive test plans covering integration tests (curl-based API testing) and E2E tests (browser-based user flows), executes test suites via subagents, and documents findings for the test-fix-retest cycle.
+
+## Test Taxonomy
+
+This skill generates three types of tests. Read `references/test-taxonomy.md` for full definitions:
+- **Integration Tests**: API-level via `curl`. Security-focused request/response analysis. Classification: `integration/api`.
+- **E2E Tests**: Frontend-to-backend flows via `agent-browser`/Playwright + chrome-devtools-mcp. Classification: `e2e/webapp`, `e2e/mobile`.
+- **Regression Tests**: Unit tests (`testing.unitTestCommand`) run ONCE at the end. Classification: `regression/unit`.
+
+Read `references/security-checklist.md` for the 17-item security observation checklist applied to each suite.
 
 ## Orchestrator Protocol
 
@@ -52,7 +60,7 @@ The main agent is the Orchestrator. It coordinates phases but NEVER executes ope
 - Compile summaries from agent reports
 - Make phase-gating decisions (proceed/stop/abort)
 
-**Reporting hierarchy:** Agent → Orchestrator → Plan
+**Reporting hierarchy:** Agent -> Orchestrator -> Plan
 
 ## Arguments: $ARGUMENTS
 
@@ -75,7 +83,7 @@ Space-separated, combinable (e.g., `staged file:docs/feature.md rescan`). `file:
 - **Doc-based** (`guided file:<path>` or pick from `docs/`/`_autonomous/pending-guided-tests/`): happy-path workflows only.
 - **Description-based** (`guided "description"` or describe when prompted): happy-path workflows only.
 
-User performs all actions on their real device/browser. Claude provides step-by-step instructions and verifies results via DB queries/API/logs. Only happy-path workflows in guided mode. Categories 2-9 handled exclusively in autonomous mode — NEVER in guided session. No agent-browser, no Playwright — guided mode never loads or uses browser automation tools.
+User performs all actions on their real device/browser. Claude provides step-by-step instructions and verifies results via DB queries/API/logs. Only happy-path workflows in guided mode. Categories 2-8 handled exclusively in autonomous mode — NEVER in guided session. No agent-browser, no Playwright — guided mode never loads or uses browser automation tools.
 
 `guided` alone prompts via `AskUserQuestion` to pick a doc or describe a feature. Combinable with `rescan` but NOT with `staged`/`unstaged`/`N`/`working-tree` (git-scope args incompatible — guided bypasses git diff).
 
@@ -90,82 +98,78 @@ Print resolved scope, then proceed without waiting.
 **Config hash method**: `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"` — referenced throughout as "Config hash method".
 
 **Step 0: Prerequisites Check** — Read `~/.claude/settings.json`:
-1. **ExitPlanMode hook** (informational): if missing → inform user the skill-scoped hook handles it automatically; global setup available via the script. Continue.
+1. **ExitPlanMode hook** (informational): if missing -> inform user the skill-scoped hook handles it automatically; global setup available via the script. Continue.
 2. **AskUserQuestion hook** (informational): same as above. Continue.
 
-**Step 1: Capabilities Scan** — Triggers: `rescan` arg, `capabilities` missing, or `lastScanned` older than `rescanThresholdDays` (default 7 days). If none → use cache.
+**Step 1: Capabilities Scan** — Triggers: `rescan` arg, `capabilities` missing, or `lastScanned` older than `rescanThresholdDays` (default 7 days). If none -> use cache.
 
 Spawn **Explore agent** (`subagent_type: "Explore"`, thoroughness: `"medium"`) to perform:
-1. **Docker MCP Discovery**: `mcp-find` for MCPs matching service names and generic queries. Record `name`, `description`, `mode`; `safe: true` only for known sandbox MCPs. If unavailable → empty array.
-2. **Frontend Testing**: `which agent-browser`, `which playwright`/`npx playwright --version` → set `frontendTesting` booleans.
-3. **External Service CLI Detection**: Load `references/external-services-catalog.json`. Scan CLAUDE.md files for `claudeMdKeywords`. Per match: run `detectionCommand` → if unavailable, `cli.available: false` → if available, run `modeDetection.command` → pattern-match: production → `live`/blocked, sandbox → `sandbox`/unblocked, else → `unknown`/unblocked → warn if blocked → populate `allowedOperations`/`prohibitedFlags` → merge into `externalServices[]`.
+1. **Docker MCP Discovery**: `mcp-find` for MCPs matching service names and generic queries. Record `name`, `description`, `mode`; `safe: true` only for known sandbox MCPs. If unavailable -> empty array.
+2. **Frontend Testing**: `which agent-browser`, `which playwright`/`npx playwright --version` -> set `frontendTesting` booleans.
+3. **Chrome DevTools MCP Detection**: Run `mcp-find` for chrome-devtools; scan `~/.claude.json` and `~/.claude/settings.json` for `mcpServers` containing `chrome-devtools`. Store in `capabilities.frontendTesting.chromeDevtools`.
+4. **Project Type Detection**: Read `references/project-type-detection.md`. Scan `package.json` files in project root and `relatedProjects[]` paths. Store in `project.frontendType` and `relatedProjects[].frontendType`.
+5. **External Service CLI Detection**: Load `references/external-services-catalog.json`. Scan CLAUDE.md files for `claudeMdKeywords`. Per match: run `detectionCommand` -> if available, run `modeDetection.command` -> pattern-match -> populate `allowedOperations`/`prohibitedFlags` -> merge into `externalServices[]`.
 
 Agent reports back. Orchestrator writes to `capabilities` with `lastScanned` = UTC time (`date -u`).
 
 **Step 1.5: Tool Inventory** — ALWAYS runs (no caching — tools change between sessions):
 
-- **Orchestrator directly** (no agent spawn needed):
-  1. **Skills**: Extract available skills from system-reminder context (name, trigger description)
-  2. **Agents**: Extract available agent types from Agent tool description (type, capabilities summary)
-- **Delegate to Explore agent** (combine with Step 1 capabilities scan if triggered, or spawn separately if Step 1 used cache):
-  3. **MCP servers**: Run `mcp-find` for available MCPs + scan `~/.claude/settings.json` for `mcpServers` key
-  4. **CLIs**: External service detection (from Step 1) + probe common tools (`which curl`, `which jq`, `which ngrok`, `which uvx`)
-- **Compile Tool Inventory**: Structured inventory with per-phase recommendations:
-  - Phase 1 (Safety): relevant health-check CLIs, Docker MCP
-  - Phase 2 (Discovery): Explore agent, Grep/Glob, relevant MCPs for code analysis
-  - Phase 3 (Plan): skills and agents available for plan execution
-  - Phase 4 (Execution): service-specific MCPs (preferred over CLI), CLI fallbacks, browser tools, DB tools
+- **Orchestrator directly** (no agent spawn):
+  1. **Skills**: Extract available skills from system-reminder context
+  2. **Agents**: Extract available agent types from Agent tool description
+- **Delegate to Explore agent** (combine with Step 1 if triggered, or spawn separately):
+  3. **MCP servers**: Run `mcp-find` + scan `~/.claude/settings.json` for `mcpServers`. Include chrome-devtools-mcp in inventory if available.
+  4. **CLIs**: External service detection + probe common tools (`which curl`, `which jq`, `which ngrok`, `which uvx`)
+- **Compile Tool Inventory**: Per-phase recommendations (Safety: health-check CLIs; Discovery: Explore+Grep/Glob; Plan: skills/agents; Execution: service MCPs, CLI fallbacks, browser tools, DB tools, chrome-devtools-mcp)
 
-**CLAUDE.md deep scan** (Phase 0 + Phase 2): `find . -maxdepth 3 -name "CLAUDE.md" -type f` + `~/.claude/CLAUDE.md` + `.claude/CLAUDE.md`. Cache list for: capabilities scan, auto-extract, Phase 2 enrichment, Feature Context Document. Read each once.
+**CLAUDE.md deep scan** (Phase 0 + Phase 2): `find . -maxdepth 3 -name "CLAUDE.md" -type f` + `~/.claude/CLAUDE.md` + `.claude/CLAUDE.md`. Cache list for capabilities scan, auto-extract, Phase 2 enrichment, Feature Context Document.
 
 **Step 2: Config Check** — `test -f .claude/autonomous-tests.json && echo "CONFIG_EXISTS" || echo "CONFIG_MISSING"`. Schema: `references/config-schema.json`.
 
 ### If `CONFIG_EXISTS` (returning run):
 1. Read config.
-2. **Version validation**: require `version: 5` + fields `project`, `database`, `testing`. v4→v5: migrate `*Cli` fields from `capabilities` to `externalServices[].cli`. v3→v4→v5: add empty `capabilities` first. <3 or missing fields → warn, re-run first-run.
-   - Missing `database.seedStrategy` → default `"autonomous"`, inform user.
-   - Missing `documentation.fixResults` → add `"docs/_autonomous/fix-results"`.
-   - Legacy `userContext.credentialType` → delete silently.
-3. **Config trust**: Compute hash using **Config hash method**. Check trust store `~/.claude/trusted-configs/{project-hash}.sha256` (project hash: `python3 -c "import hashlib,os;print(hashlib.sha256(os.path.realpath('.').encode()).hexdigest()[:16])"`). Mismatch → show config (redact `testCredentials` values as `"********"`) → `AskUserQuestion` for approval → write hash.
-4. **Testing priorities**: Show `userContext.testingPriorities`. `AskUserQuestion`: "Pain points or priorities?" with "None" option to clear. Update config.
-5. **Re-scan services**: Delegate to Explore agent (same as Step 1). Update config if needed.
-6. `date -u +"%Y-%m-%dT%H:%M:%SZ"` → update `lastRun`.
-7. Empty `userContext` → run questionnaire below, save.
-8. **Re-stamp trust**: if config modified → recompute using **Config hash method**, write to trust store.
+2. **Version validation**: require `version: 6` + fields `project`, `database`, `testing`. v5->v6: add `frontendType: "none"`, `chromeDevtools: false`, `e2eUrl: null`, `browserPreference: "agent-browser"`, add `logFile: null` to services, add `logCommand: null` to relatedProjects, add `frontendIndicators`, remove deprecated eligibility and `credentialType` fields, bump to 6. v4->v5->v6: chain migrations. <4 or missing fields -> warn, re-run first-run.
+   - Missing `database.seedStrategy` -> default `"autonomous"`, inform user.
+   - Missing `documentation.fixResults` -> add `"docs/_autonomous/fix-results"`.
+3. **Config trust**: Compute hash using **Config hash method**. Check trust store `~/.claude/trusted-configs/{project-hash}.sha256`. Mismatch -> show config (redact `testCredentials` values as `"********"`) -> `AskUserQuestion` for approval -> write hash.
+4. **Testing priorities**: Show `userContext.testingPriorities`. `AskUserQuestion`: "Pain points or priorities?" with "None" option. Update config.
+5. **Re-scan services**: Delegate to Explore agent. Update config if needed.
+6. `date -u +"%Y-%m-%dT%H:%M:%SZ"` -> update `lastRun`.
+7. Empty `userContext` -> run questionnaire, save.
+8. **Re-stamp trust**: if config modified -> recompute hash, write to trust store.
 9. Skip to Phase 1.
 
 ### If `CONFIG_MISSING` (first run):
-Spawn **Explore agent** (`subagent_type: "Explore"`, thoroughness: `"medium"`) for auto-extraction:
-1. **Auto-extract** from CLAUDE.md files (deep scan) + compose + env + package manifests. Detect `migrationCommand`/`cleanupCommand` from compose, `scripts/`, Makefiles, package.json (`manage.py migrate`, `npx prisma migrate deploy`, `knex migrate:latest`, etc.). Detect seed commands.
-   **DB type**: MongoDB (`mongosh`/`mongo`, `mongoose`/`mongodb`/`@typegoose`, `mongodb://`, mongo containers) vs SQL (`psql`/`mysql`/`sqlite3`, `pg`/`mysql2`/`sequelize`/`prisma`/`knex`/`typeorm`/`drizzle`/`sqlalchemy`/`django.db`, `postgres://`/`mysql://`/`sqlite:///`, SQL containers). Both found → ask user.
-2. **Topology**: `single` | `monorepo` (workspace configs, multiple `package.json`, `backend/`+`frontend/`) | `multi-repo` (CLAUDE.md cross-refs, sibling `.git`, shared docker-compose).
-3. **Related projects**: scan sibling dirs, grep for external paths → ask user per candidate → populate `relatedProjects`.
+Spawn **Explore agent** for auto-extraction:
+1. **Auto-extract** from CLAUDE.md files + compose + env + package manifests. Detect migration/cleanup/seed commands. Detect DB type (MongoDB vs SQL). Both found -> ask user.
+2. **Topology**: `single` | `monorepo` | `multi-repo`.
+3. **Related projects**: scan sibling dirs, grep for external paths -> ask user per candidate -> populate `relatedProjects`.
 
 Agent reports. Orchestrator proceeds:
 4. **Capabilities scan** — delegate (Step 1).
-5. **Seeding strategy** via `AskUserQuestion`: autonomous (recommended, agents create per-suite data) or command (global seed command).
-6. **User Context Questionnaire** (all at once, partial OK): flaky areas? credentials (env var/role names only)? priorities? notes? → store in `userContext`.
-7. **Propose config** → STOP for confirmation → write.
-8. **Stamp trust**: compute using **Config hash method** → write to trust store.
-9. If CLAUDE.md < 140 lines and lacks startup instructions → append max 10 lines.
+5. **Seeding strategy** via `AskUserQuestion`: autonomous (recommended) or command.
+6. **User Context Questionnaire**: flaky areas? credentials (env var/role names only)? priorities? notes? -> store in `userContext`.
+7. **Propose config** -> STOP for confirmation -> write.
+8. **Stamp trust**: compute hash -> write to trust store.
+9. If CLAUDE.md < 140 lines and lacks startup instructions -> append max 10 lines.
 
-## Phase 1 — Safety & Environment
+## Phase 1 — Safety, Environment & Log Monitoring
 
-**Objective**: Verify the environment is safe and ready for testing.
+**Objective**: Verify the environment is safe, start services, and begin log capture.
 
 Spawn ONE **general-purpose subagent** (foreground) to perform:
-1. **Production scan**: `.env` files for `productionIndicators`, `*LIVE*SECRET*`, `NODE_ENV=production`, production DB endpoints (RDS, Atlas without dev/stg/test), non-local URLs. Show variable NAME only.
+1. **Production scan**: `.env` files for `productionIndicators`, `*LIVE*SECRET*`, `NODE_ENV=production`, production DB endpoints, non-local URLs. Show variable NAME only.
 2. Run `sandboxCheck` commands from config.
 3. Verify Docker is local.
-4. **Related project safety scan**: For each `relatedProjects[]` entry with a `path`:
-   - Scan `.env` files in the related project path for the same production indicators (`productionIndicators`, `*LIVE*SECRET*`, `NODE_ENV=production`, production DB endpoints, non-local URLs)
-   - Show variable NAME + related project name if found
-   - Any production indicator in a related project triggers the same **ABORT** gate as the main project
-5. **Service startup**: per service in config + related projects with `startCommand`: health check → healthy: `already-running` → unhealthy: start + poll 5s/30s → `started-this-run` or report failure.
+4. **Related project safety scan**: For each `relatedProjects[]` with a `path`, scan `.env` files for production indicators. Any production indicator -> **ABORT**.
+5. **Service startup**: per service in config + related projects with `startCommand`: health check -> healthy: `already-running` -> unhealthy: start + poll 5s/30s -> `started-this-run` or report failure.
 6. Start webhook listeners.
-7. **Service Readiness Report**: per service — name, URL/port, health status, health check endpoint, source (`config`|`relatedProject`).
+7. **Log monitoring setup**: After services are healthy, start log capture per `references/log-monitoring-protocol.md`:
+   - For each service with `logCommand`: start background log capture to `/tmp/test-logs-{sessionId}/`
+   - Record log file paths and PIDs in Service Readiness Report
+8. **Service Readiness Report**: per service — name, URL/port, health status, health check endpoint, source, log file path, log capture PID.
 
-Agent reports: safety assessment + Service Readiness Report. Gates: **ABORT** if production. **STOP** if unhealthy. Keep report for Phase 3.
+Agent reports: safety assessment + Service Readiness Report with log paths. Gates: **ABORT** if production. **STOP** if unhealthy.
 
 ## Phase 2 — Discovery
 
@@ -175,92 +179,36 @@ Fully autonomous — derive from code diff, codebase, or guided source. Never as
 
 ### Standard mode
 1. Changed files from git (scope args) — include `relatedProjects[].path` for cross-project deps.
-2. If `file:<path>` → read `.md`, extract features/criteria/endpoints/edge cases (supplements diff).
+2. If `file:<path>` -> read `.md`, extract features/criteria/endpoints/edge cases.
 3. **Spawn Explore agent** with: changed files, file reference content, `relatedProjects[]`, `testing.contextFiles`, CLAUDE.md paths, `documentation.*` paths. Agent performs:
-   - **Feature map**: API endpoints, DB ops (MongoDB: `find`/`aggregate`/`insertMany`/`updateOne`/`deleteMany`/`bulkWrite`/`createIndex`/schema changes; SQL: `SELECT`/`INSERT`/`UPDATE`/`DELETE`/`JOIN`/`GROUP BY`/`CREATE TABLE`/`ALTER TABLE`/`CREATE INDEX`/migrations/ORM), external services, business logic, auth flows, signal/event chains
-   - **Dependency graph**: callers → changed code → callees, cross-file/project imports
-   - **Smart doc analysis**: (a) match paths/features/endpoints against `docs/` (read relevant only), (b) `_autonomous/` scan (Summary + Issues Found only, extract prior failures/bugs), (c) fix completion scan (`RESOLVED`+`PASS` → regression targets, `Ready for Re-test: YES` → priority)
+   - **Feature map**: API endpoints, DB ops, external services, business logic, auth flows, signal/event chains
+   - **Dependency graph**: callers -> changed code -> callees, cross-file/project imports
+   - **Smart doc analysis**: match paths/features against `docs/`, scan `_autonomous/` (Summary + Issues Found only), fix completion scan
    - **Edge case inventory**: error handlers, validation branches, race conditions, retry logic
-   - **Cross-project seed map**: For each `relatedProjects[]`, trace which collections/tables in the related project's database are read by the main project's E2E flows (shared users, linked entities, cross-service references). Per dependency: related project name, collection/table, required fields, relationship to main project data, connection command from `relatedProjects[].database.connectionCommand` or inferred from config.
-   - **Test flow classification**: Classify each test scenario as `autonomous/api` (API-only, no UI), `autonomous/ui` (browser automation needed), `guided/webapp` (user performs actions in web browser), or `guided/mobile` (user performs actions on physical mobile device). For related projects with `relationship: "mobile"`, trace user flows → classify as `guided/mobile`.
-   - **Related project log commands**: Discover log commands per `relatedProjects[]` entry — from `logCommand` field, or inferred from `startCommand`/compose config. Record for post-test log verification.
+   - **Cross-project seed map**: For each `relatedProjects[]`, trace which collections/tables are read by E2E flows
+   - **Test flow classification**: Classify each scenario as `integration/api` (API-only, curl), `e2e/webapp` (browser automation), `e2e/mobile` (physical device guided steps), `guided/webapp`, `guided/mobile`. Project type influences: if `frontendType` is `webapp` -> generate `e2e/webapp` suites; if `mobile` -> `e2e/mobile`; if `api-only` -> only `integration/api`.
+   - **Security checklist mapping**: Read `references/security-checklist.md`. Map each of 17 items to YES/NO/PARTIAL per discovered feature.
+   - **Data seeding analysis**: Read `references/data-seeding-protocol.md`. Analyze DB schema and models. Return seed plan with table names, field names, example values, create/cleanup commands.
+   - **Related project log commands**: Discover log commands per `relatedProjects[]`.
 4. Receive structured report.
 
 ### Guided mode (user augmentation)
-**Validate first**: `guided` + `staged`/`unstaged`/`N`/`working-tree` → STOP with combinability error.
-1. **Resolve source**: `guided file:<path>` → doc-based | `guided "desc"` → description-based | `guided` alone → `AskUserQuestion` (pick doc or describe).
-2. **Spawn Explore agent** with: source content, mode type, `relatedProjects[]`, `testing.contextFiles`, CLAUDE.md paths, `documentation.*` paths. Agent performs: deep feature analysis (keywords, endpoints, models, workflows via Glob/Grep, import tracing) + same feature map/dependency/doc analysis/edge cases as standard. Agent also identifies: DB seed requirements per test, external service setup needs, prerequisite state for each happy-path workflow.
-3. Receive report. Orchestrator extracts only happy-path workflows — discard security, edge case, validation, race condition findings (those are autonomous-only).
+**Validate first**: `guided` + `staged`/`unstaged`/`N`/`working-tree` -> STOP with combinability error.
+1. **Resolve source**: `guided file:<path>` -> doc-based | `guided "desc"` -> description-based | `guided` alone -> `AskUserQuestion`.
+2. **Spawn Explore agent** with same inputs. Agent performs: deep feature analysis + same feature map/dependency/doc analysis/edge cases. Also identifies: DB seed requirements, external service setup needs, prerequisite state per happy-path workflow.
+3. Receive report. Orchestrator extracts only happy-path workflows — discard security, edge case, validation findings.
 
 ### Regression Scope Analysis (conditional — after Explore report)
-
-Check the Explore agent's report for re-test indicators:
-- Fix-results entries with `Ready for Re-test: YES`
-- Pending-fixes entries with `### Resolution` → `Status: RESOLVED` + `Verification: PASS`
-
-**If NEITHER found** → skip, compile normal Feature Context Document below.
-
-**If FOUND** → Regression mode. Orchestrator compiles from the Explore report (no additional agent — this is a filtering/cross-referencing operation on data already gathered):
-
-1. **Fix manifest**: per resolved item — ID, title, files modified, what was done, source path, original test IDs, verification details. V-prefix: add OWASP + attack vector.
-2. **1-hop impact zone**: from the Explore agent's dependency graph, extract only direct callers and direct callees of each modified file. Discard beyond 1-hop.
-3. **Prior test mapping**: cross-reference `Source` paths and `Original Test IDs` against test-results to identify which suites and test IDs originally failed. If `Original Test IDs` absent (legacy fix-results), fall back to parsing `Source` path → open pending-fixes → extract `Test ID`.
-4. **Prior pass mapping**: from the same test-results docs, extract suites/tests that PASSED — these are candidates for exclusion.
-5. **Blast radius check**: if modified files' combined 1-hop zone covers >60% of the feature map → fall back to full Feature Context Document, note "blast radius exceeds regression threshold — running full scope."
-
-Compile **Targeted Regression Context Document** (replaces Feature Context Document for Phase 3):
-- Regression mode header (type, fix-results source path, original test-results path, fix date, item count)
-- Fix manifest (per item: ID, title, files modified, description, original test IDs, 1-hop callers/callees)
-- Regression test scope: Required tests (verify fix scenarios + 1-hop impact) and Excluded areas (unaffected suites from original run, with reason)
-- Prior passing tests summary (context for agents — avoid re-testing)
-- Environment/capabilities (same as Feature Context Document)
+Check for re-test indicators (`Ready for Re-test: YES`, `Status: RESOLVED` + `Verification: PASS`). If found -> compile **Targeted Regression Context Document** (fix manifest, 1-hop impact zone, original test IDs, blast radius check >60% -> full scope).
 
 ### Feature Context Document (standard/guided modes — skipped in regression mode)
-Compile from Explore report (do NOT re-read files). Contents: features, endpoints, DB collections/tables, cross-project seed map (related project DB dependencies with collection/table, required fields, connection commands), test flow classifications, related project log commands, external services, edge cases, test history, file reference content, capabilities. Guided mode adds `Mode` + `Source` at top. Cascaded to every Phase 4 agent.
+Compile from Explore report (do NOT re-read files). Contents: features, endpoints, DB collections/tables, cross-project seed map, test flow classifications, security checklist applicability map, data seeding plan, log file paths from Service Readiness Report, related project log commands, external services, edge cases, test history, capabilities. Guided mode adds `Mode` + `Source` at top. Cascaded to every Phase 4 agent.
 
-### Live E2E Eligibility Analysis (standard mode only — skip in guided and regression)
+### Post-Discovery Prompts (standard mode only — skip if `guided` or regression)
+Single `AskUserQuestion`:
+- **Guided Happy Path** — After all autonomous tests, generate guided test plan where user performs actions while agent verifies. Happy-path only. Include? (yes/no)
 
-After the Feature Context Document is compiled, the orchestrator cross-references features with capabilities to determine which external services are both available and relevant to the code being tested:
-
-1. **Extract external service usage from feature map**: Collect all external services referenced by the changed code (webhook handlers, API calls, storage operations). Each entry: service name, operations used, code paths.
-2. **Cross-reference with capabilities**: For each service in the feature map, check `externalServices[]` in config:
-   - `cli.available && !cli.blocked` → **eligible** (available in sandbox)
-   - `cli.available && cli.blocked` → **blocked** (production keys detected)
-   - `!cli.available` → **unavailable** (CLI not installed)
-   - Also check `capabilities.dockerMcps[]` for relevant sandbox MCPs
-3. **Compile eligibility list**: Per eligible service: name, mode, relevant `allowedOperations` matching the feature map, applicable MCP tools. Only services that are both available and relevant to the changed code appear.
-3.5. **Test clock detection**: For each eligible service with `testClockSupport` in the external services catalog, check the feature map against `testClockSupport.triggerKeywords`. If any keyword matches → set `testClockRequired: true` on the eligibility entry. Note: CLI required for clock operations per catalog `requiredCli`; MCP used for complementary operations per catalog `mcpOperations`.
-4. **Store**: `liveE2eEligibility: { eligible: [...], blocked: [...], unavailable: [...] }` — carried to prompts and Phase 3.
-
-### Post-Discovery Prompts (standard mode only — skip if `guided` arg present or regression mode)
-
-After Feature Context Document and Live E2E Eligibility Analysis, prompt the user before entering plan mode. Use a single `AskUserQuestion` to reduce friction:
-
-```
-Based on the discovered features, I have two optional additions:
-
-{IF liveE2eEligibility.eligible is non-empty}
-1. **Live E2E Testing** — The changed code interacts with external services available in sandbox mode:
-{for each eligible service}
-   - {service.name} ({service.mode}): {comma-separated relevant allowedOperations[].command}
-{end for}
-   These run after the standard autonomous tests, using real CLI/MCP calls. Each service requires your approval again at runtime before any CLI call.
-   → Include live E2E suites? (yes/no)
-{ELSE}
-1. **Live E2E Testing** — No external services are both available and relevant to the changed code. Skipping.
-{END IF}
-
-2. **Guided Happy Path** — After all autonomous tests, I can generate a guided test plan where you perform actions on your device/browser while I verify results via DB/API/logs. Happy-path workflows only.
-   → Include guided happy-path section? (yes/no)
-
-Reply with your choices (e.g., "yes to both", "live e2e yes, guided no", "no to both").
-```
-
-Parse response into two boolean decisions:
-- `liveE2eApproved` (forced `false` if eligibility list was empty)
-- `guidedHappyPathApproved`
-
-If eligibility list is empty AND `guided` arg present → skip prompt entirely.
+Parse response into `guidedHappyPathApproved` boolean.
 
 ## Phase 3 — Plan (Plan Mode)
 
@@ -269,245 +217,132 @@ If eligibility list is empty AND `guided` arg present → skip prompt entirely.
 **Step 0 — Context Reload** (for post-approval reconstruction):
 - Re-read: SKILL.md, config, `references/templates.md`
 - Scope: `$ARGUMENTS`, branch, commit range
-- Findings: Phase 2 discoveries (modules, endpoints, dependencies, test flow classifications, related project log commands)
+- Findings: Phase 2 discoveries (modules, endpoints, dependencies, test flow classifications)
 - User context: flaky areas, priorities, notes
-- Service Readiness Report from Phase 1 (Phase 3 agents MUST NOT start services or re-check health — service restoration occurs at Phase 4 start)
+- Service Readiness Report from Phase 1 (including log file paths — Phase 3 agents MUST NOT start services)
 - If regression mode: fix manifest, 1-hop impact zone, original test IDs, Targeted Regression Context Document
-- If guided: type, source, and full guided test list with per-test seed requirements
-- If live E2E approved: eligibility list (per-service: name, mode, relevant operations, MCP tools), user approval status
-- If guided happy path approved: list of happy-path workflows from Feature Context Document with per-test seed requirements, user instructions, verification queries
+- If guided: type, source, full guided test list with per-test seed requirements
+- If guided happy path approved: happy-path workflows with seed requirements, user instructions, verification queries
 
-**Tool loading gate**: If autonomous mode needs agent-browser/Playwright, list tools and prompt user via AskUserQuestion before plan approval. Declined tools excluded from plan. Guided mode: NEVER include browser automation tools — skip this gate entirely.
+**Tool loading gate**: If autonomous mode needs agent-browser/Playwright, list tools and prompt user via AskUserQuestion before plan approval. Declined tools excluded from plan. Guided mode: NEVER include browser automation tools — skip this gate.
 
 **Self-containment mandate** — the plan MUST embed directly (not reference "above" or prior phases):
 1. All test suites with full details (name, objective, pre-conditions, steps, expected outcomes, teardown, verification)
 2. Feature Context Document (condensed but complete)
-3. Service Readiness Report from Phase 1 (used by Phase 4 service restoration agent to re-verify/restart services after context reset)
-4. Per-suite agent spawn instructions with resolved values (env, steps, verification, credential role name, DB lifecycle, browser priority chain)
+3. Service Readiness Report from Phase 1 (including log file paths and capture PIDs)
+4. Per-suite agent spawn instructions with resolved values
 5. Config paths: `documentation.*`, `database.connectionCommand`, `testing.unitTestCommand`, `testDataPrefix`
 6. Credential role names from `testCredentials`
-7. If guided: per-test DB seed commands, user-facing step-by-step instructions, and verification queries
-8. Seed schema discovery mandate (embedded verbatim for Phase 4 agents)
-9. If live E2E approved: Live E2E Decision block — per-service: name, mode, relevant `allowedOperations`, applicable MCP tools, `userPromptTemplate` for runtime CLI gate. If `testClockRequired`: embed Test Clock sub-protocol (resolved from catalog `testClockSupport`). Embedded verbatim so post-reset orchestrator can prompt and execute.
-10. If guided happy path approved: Guided Happy Path Decision block — per-test: name, objective, prerequisites, step-by-step user instructions, DB seed commands, verification queries, expected outcomes.
-11. Documentation checklist (always embedded, never conditional) — the post-reset orchestrator needs this to know what files to generate after testing. Include: output directories from config (`documentation.*` paths), template reference path (`references/templates.md`), filename convention (`{timestamp}_{semantic-name}.md`, timestamp from `date -u`), and which doc types this run produces. At minimum: test-results doc. Conditionally: pending-fixes (if failures/findings exist), pending-guided-tests (if guided tests identified or approved), pending-autonomous-tests (if tests queued but not run). Without this embedded checklist, the orchestrator has no way to know about doc generation after context reset — which is why it gets skipped.
-12. Tool Inventory from Phase 0 — full inventory with per-phase recommendations so subagents know which tools are available without re-scanning.
-13. DB Consistency Check Protocol from `references/db-consistency-protocol.md` — embedded verbatim so agents execute inline checks without needing the reference file post-reset.
+7. If guided: per-test DB seed commands, user-facing instructions, verification queries
+8. Seed schema discovery mandate (embedded verbatim) per `references/data-seeding-protocol.md`
+9. If guided happy path approved: Guided Happy Path Decision block
+10. Documentation checklist (always — output directories, template path, filename convention, doc types this run produces)
+11. Tool Inventory from Phase 0
+12. DB Consistency Check Protocol from `references/db-consistency-protocol.md`
+13. Security checklist applicability map (which of the 17 items apply to which features)
+14. Explicit data seeding plan (tables, fields, values, curl/DB commands per `references/data-seeding-protocol.md`)
+15. Log file paths from Service Readiness Report
+16. Chrome DevTools protocol (if available) from `references/chrome-devtools-protocol.md`
+17. Service startup commands for all project + relatedProject services
+18. Execution protocols from `references/execution-protocols.md` — embed relevant protocols verbatim
 
-- Execution Protocol — autonomous mode (embed verbatim — orchestrator uses this after context reset):
-  ```
-  SERVICE RESTORATION: Spawn general-purpose subagent (foreground). Re-verify all services from Service Readiness Report using healthCheck from config. Unhealthy → restart via startCommand + poll 5s/30s. Start webhook listeners. STOP if any service unreachable. Returns updated Service Readiness Report.
-  SETUP: Spawn general-purpose subagent (foreground). Reads source files, compiles Feature Context Document, returns results.
-  TOOL CONTEXT: Suite agents receive relevant Tool Inventory subset (service MCPs, CLI fallbacks, browser tools, DB tools) in their prompts.
-  DB CONSISTENCY: Agents capture dbBaseline before first seed. Execute POST_SEED after seeding, POST_TEST after test execution, POST_CLEANUP after cleanup. Report results with suite PASS/FAIL. Protocol embedded in plan from references/db-consistency-protocol.md.
-  FLOW: STRICTLY SEQUENTIAL — one subagent at a time:
-    1. For each suite (in order):
-       a. Spawn ONE general-purpose subagent (foreground)
-       b. Provide in prompt: full context (env, steps, verification, teardown, Feature Context Document, credentials, Service Readiness Report, DB lifecycle, browser priority chain, related project log commands, test flow type)
-       c. BLOCK — foreground = automatic blocking
-       d. Receive results directly
-       e. Record PASS/FAIL
-       f. Next suite
-  LIVE E2E (conditional): Execute if plan contains liveE2eApproved: true. Follow live E2E execution protocol.
-  GUIDED HAPPY PATH (conditional): Execute if plan contains guidedHappyPathApproved: true. Follow guided happy path execution protocol.
-  DOCUMENTATION: Follow documentation execution protocol. Generate all applicable doc types from the embedded documentation checklist. This step runs even if all tests passed — the test-results record is needed for regression tracking.
-  PROHIBITED: multiple concurrent subagents, parallel execution, main-conversation execution
-  AUDIT: agents spawned count, suites executed, cleanup status
-  ```
+### Test Plan Structure
 
-- Execution Protocol — guided mode (embed verbatim):
-  ```
-  MODE: User augmentation
-  NO BROWSER AUTOMATION: agent-browser and Playwright MUST NOT be loaded
-  CATEGORIES: Happy-path workflows ONLY
-  SERVICE RESTORATION: Spawn general-purpose subagent (foreground). Re-verify all services from Service Readiness Report using healthCheck from config. Unhealthy → restart via startCommand + poll 5s/30s. Start webhook listeners. STOP if any service unreachable. Returns updated Service Readiness Report.
-  TOOL CONTEXT: Seeding/verification agents receive DB + service tool subset from Tool Inventory.
-  FLOW: For each guided test (in order):
-    1. Spawn ONE general-purpose subagent (foreground) for DB seeding + external service setup
-    2. Subagent seeds database, configures services, returns readiness status
-    3. Orchestrator presents steps via AskUserQuestion tool (MANDATORY — text output PROHIBITED):
-       Question: "## Guided Test: {test-name}\n\n**Setup complete**: {seeds/services summary}\n\n**Steps**:\n1. {step}\n2. {step}\n...\n\n**What to verify**: {expected outcomes}"
-       Options: ["Done - ready to verify", "Skip this test", "Issue encountered"]
-       - "Done" → spawn verification subagent
-       - "Skip" → record SKIP, proceed to next test
-       - "Issue" → follow-up AskUserQuestion for issue description, record as finding
-    4. User performs actions on real device/browser
-    5. Orchestrator verifies results via DB queries/API/logs
-    6. Record PASS/FAIL → next test
-  PROHIBITED: agent-browser, Playwright, security/edge-case/validation tests
-  ```
+```
+## Test Plan
 
-- Execution Protocol — live E2E mode (embed verbatim — conditional, only if liveE2eApproved):
-  ```
-  RUNS AFTER: All autonomous (mocked) suites complete. Live E2E tests real external services in sandbox — running them first would risk polluting the mocked test environment.
-  SERVICES: {embedded per-service details from Live E2E Decision block}
-  TOOL CONTEXT: Agents receive target service's MCP tools (preferred) + CLI (fallback) from Tool Inventory.
-  FLOW: Sequential — one subagent at a time:
-    1. For each live E2E suite:
-       a. CLI gate: AskUserQuestion per service using embedded userPromptTemplate (once per service, not per suite)
-       b. Declined → skip that service's suites, mark "skipped — user declined at runtime"
-       c. Approved → cli.approvedThisRun: true
-       d. Sandbox check: agent re-runs modeDetection.command before first CLI call. If production detected → abort live E2E for that service (keys may have changed since Phase 0).
-       e. Spawn ONE general-purpose subagent (foreground) with full context + CLI details + allowed/prohibited operations
-       f. Record PASS/FAIL → next suite
-  TEST CLOCK SUB-PROTOCOL (conditional — only when testClockRequired on service):
-    All operations resolved from `testClockSupport` in external-services-catalog.json.
-    1. Create clock via catalog `cliOperations` (frozen at start time)
-    2. Create entities attached to clock via catalog `mcpOperations` (preferred) or CLI
-    3. Set up recurring lifecycle scenario per feature map
-    4. Advance clock to future time via catalog `cliOperations`
-    5. Verify state changes via catalog `mcpOperations`
-    6. Verify expected events received per `triggerKeywords`
-    7. Repeat steps 4-6 for additional time scenarios per test plan
-    8. Cleanup: delete clock via catalog `cliOperations` — ALWAYS execute, even on failure (wrap in finally/trap)
-    NOTE: See catalog `testClockSupport` for exact CLI commands and MCP operations.
-  ```
+### Integration Test Suites (curl-based)
+Categories 1-8 per references/test-taxonomy.md. Each suite includes:
+- Explicit curl commands with expected responses
+- Security checklist items applicable to this suite (YES/PARTIAL only)
+- Data seeding commands (what to create before, what to clean after)
+- Log file paths for post-suite analysis
 
-- Execution Protocol — guided happy path mode (embed verbatim — conditional, only if guidedHappyPathApproved):
-  ```
-  RUNS AFTER: All autonomous suites AND live E2E suites (if any). Guided runs last because it requires the user's active participation — pausing autonomous work mid-flow would be disruptive.
-  NO BROWSER AUTOMATION: The user performs all actions. agent-browser and Playwright are not loaded.
-  CATEGORIES: Happy-path workflows only (category 1). Edge cases, security, and validation are autonomous-only — they don't benefit from manual execution.
-  FLOW: For each guided test:
-    1. Spawn ONE general-purpose subagent (foreground) for DB seeding + service setup
-    2. Subagent seeds database (seed schema discovery mandate), returns readiness
-    3. Orchestrator presents steps via AskUserQuestion tool (MANDATORY — text output PROHIBITED):
-       Question: "## Guided Test: {test-name}\n\n**Setup complete**: {seeds/services summary}\n\n**Steps**:\n1. {step}\n2. {step}\n...\n\n**What to verify**: {expected outcomes}"
-       Options: ["Done - ready to verify", "Skip this test", "Issue encountered"]
-       - "Done" → spawn verification subagent
-       - "Skip" → record SKIP, proceed to next test
-       - "Issue" → follow-up AskUserQuestion for issue description, record as finding
-    4. User performs actions on real device/browser
-    5. Orchestrator spawns verification subagent — DB/API/log checks
-    6. Record PASS/FAIL → next test
-  ```
+### E2E Test Suites (browser-based) — only if frontendType != api-only
+For webapp: agent-browser flows with chrome-devtools-mcp observations
+For mobile: guided steps with verification commands
+Each suite includes:
+- User journey steps
+- Expected UI states
+- Chrome DevTools observations (if available)
+- Backend verification via curl after UI actions
 
-- Execution Protocol — documentation (embed verbatim — always present, never conditional):
-  ```
-  RUNS AFTER: All test phases (autonomous + live E2E + guided) complete.
-  WHY THIS EXISTS IN THE PLAN: After context reset, Phase 5 instructions in the SKILL.md are no longer in context. Without this block, the orchestrator completes suites and stops — no docs get written. This block ensures doc generation happens.
-  WHAT TO GENERATE:
-    - test-results doc (always — even if every test passed, the record matters for regression tracking and audit trails)
-    - pending-fixes doc (when any test failed or findings were reported)
-    - pending-guided-tests doc (when guided tests were identified or guidedHappyPathApproved)
-    - pending-autonomous-tests doc (when tests were identified but not executed)
-  HOW:
-    1. Spawn general-purpose subagent (foreground)
-    2. Read references/templates.md for structure
-    3. Get timestamp: date -u +"%Y-%m-%d-%H-%M-%S"
-    4. Filename: {timestamp}_{semantic-name}.md
-    5. Write to directories from the documentation checklist embedded in this plan
-    6. Include ALL results: autonomous + live E2E (if run) + guided (if run)
-  ```
+### Regression (unit tests — runs LAST)
+Single testing.unitTestCommand execution after all suites complete.
+```
 
-**Test categories** — standard (autonomous): all 9. Guided mode (both sub-modes): category 1 ONLY. Categories 2-9 never in guided. Non-happy-path findings queued as pending-autonomous-tests.
-
-1. **Happy path** — normal expected flows end-to-end
-2. **Invalid inputs & validation** — malformed data, missing fields, wrong types, boundary values
-3. **Duplicate/idempotent requests** — rapid same-call repetition, verify no duplicate records/charges/side-effects
-4. **Error handling** — trigger every error branch (network failures, invalid states, auth failures, permission denials)
-5. **Unexpected DB changes** — orphaned records, missing refs, unintended mutations, index-less slow queries
-6. **Race conditions & timing** — concurrent writes, out-of-order webhooks, expired tokens mid-flow
-7. **Security** — injection (SQL/NoSQL/command/LDAP/XPath/SSTI/header/log), XSS (stored/reflected/DOM)/CSRF/clickjacking, auth bypass/broken access/privilege escalation/session mgmt/JWT manipulation, data exposure (sensitive responses/stack traces/metadata/timing), input attacks (file uploads: sizes/zip bombs/polyglots/path traversal; payloads: oversized/nested/type confusion/prototype pollution; params: injection/pollution/encoding; headers: host injection/SSRF; volume: rate limiting/ReDoS), infrastructure (SSRF/path traversal/deserialization/known vulns/misconfig/logging), compliance (data minimization/PII/consent/retention). Findings → `### Vulnerabilities` in test-results. Each: risk, exploit scenario, impact, mitigation, priority (data leaks > credentials > escalation > DoS > compliance).
-8. **Edge cases from code reading** — test every `if/else`, `try/catch`, guard clause, fallback
-9. **Regression** — existing unit tests + re-verify previously broken flows
-
-Each suite: name, objective, pre-conditions, steps + expected outcomes, teardown, verification queries.
-
-**Regression mode scoping**: When the plan receives a Targeted Regression Context Document:
-- Suite 1 "Fix Verification" (always): one test per fixed item — re-execute the exact original failure scenario using original test IDs as reference
-- Suite 2 "Impact Zone" (conditional): tests for 1-hop callers/callees — only categories where modified code is relevant (e.g., validation fix → Category 2; auth fix → Categories 4, 7; DB fix → Category 5). Skip categories with no code path overlap.
-- No other suites — unaffected areas excluded
-- State in plan: "Targeted regression re-test — scope limited to fix verification and 1-hop impact zone"
-- Execution protocol: unchanged (same subagent sequential flow, just fewer suites)
+**Regression mode scoping**: When Targeted Regression Context Document is present:
+- Suite 1 "Fix Verification": one test per fixed item — re-execute original failure scenario
+- Suite 2 "Impact Zone" (conditional): tests for 1-hop callers/callees
+- No other suites. Execution protocol unchanged (sequential subagent flow).
 
 **Wait for user approval.**
 
 ## Phase 4 — Execution (Subagents)
 
-Spawn `general-purpose` subagents sequentially (foreground). Each subagent receives full context in its prompt and returns results directly.
+Spawn `general-purpose` subagents sequentially (foreground). Each receives full context and returns results directly.
 
-**Service restoration agent** (mandatory, runs FIRST): Spawn one general-purpose subagent (foreground) before any other Phase 4 work. Context reset kills background processes from Phase 1 — services must be re-established. For each service in the embedded Service Readiness Report and config:
-1. Run `healthCheck` — if healthy → `verified-post-reset`
-2. If unhealthy → run `startCommand` → poll health check 5s/30s → `restarted-post-reset` or `failed-post-reset`
-3. Related projects: same check using `relatedProjects[]` healthCheck/startCommand
-4. Start webhook listeners from `externalServices[].webhookListener`
-5. **Gate**: any `failed-post-reset` → **STOP**, report to user
-6. Return updated Service Readiness Report — all subsequent agents use this
+### 1. Service Restoration Agent (fg, FIRST)
+Context reset kills background processes. Re-establish services and log captures:
+1. Run `healthCheck` per service — healthy -> `verified-post-reset` — unhealthy -> `startCommand` + poll 5s/30s
+2. Related projects: same check via `relatedProjects[]`
+3. Start webhook listeners
+4. **Re-start log captures** per `references/log-monitoring-protocol.md` for all services with `logCommand`
+5. **Gate**: any `failed-post-reset` -> **STOP**
+6. Return updated Service Readiness Report with new log file paths and PIDs
 
-**Setup agent** (mandatory): spawn after service restoration (general-purpose subagent, foreground) to read source files, compile Feature Context Document, return results. Proceeds after completion.
+### 2. Setup Agent (fg)
+Read source files, compile Feature Context Documents, read CLAUDE.md files. Proceeds after completion.
 
-**Credential assignment**: Rotate role names from `testCredentials` across suites. Task descriptions include only the **role name** — never values or env var refs. Agents resolve at runtime.
+### 3. Integration Suite Agents (fg, sequential, one at a time)
+Each agent receives: Feature Context, explicit curl commands, security checklist subset (YES/PARTIAL items only), data seeding instructions (table, fields, values, commands per `references/data-seeding-protocol.md`), log file paths, DB consistency protocol, Tool Inventory subset.
 
-**Cascading context**: Every agent receives full Feature Context Document from Phase 2.
+Execution per suite: migrate -> capture dbBaseline -> seed (after schema discovery) -> POST_SEED check -> execute curls + security checks -> POST_TEST check -> cleanup -> POST_CLEANUP check.
 
-**Capability-aware execution**: Agents leverage detected capabilities from config.
+After each suite: orchestrator checks service logs for errors (`grep ERROR/WARN --since timestamp`), runs DB consistency checks.
 
-**Browser test enforcement (autonomous mode ONLY)** — priority order (skipping without attempting is PROHIBITED):
-1. `agent-browser` (PRIMARY) if available — `open <url>` → `snapshot -i` → `click/fill @ref` → re-snapshot
-2. Playwright (FALLBACK) if agent-browser unavailable/errors
+Reports back: PASS/FAIL per test, security observations, log findings, DB consistency, anomalies.
+
+### 4. E2E Suite Agents (fg, sequential, one at a time) — only if `frontendType` != `api-only`
+Each agent receives: user journey steps, browser tool config, chrome-devtools protocol (if `chromeDevtools: true` per `references/chrome-devtools-protocol.md`), log file paths, Service Readiness Report, Feature Context Document, Tool Inventory subset.
+
+**Webapp**: Navigate with `agent-browser` -> snapshot -> execute journey -> re-snapshot + devtools check -> verify backend via curl -> verify DB.
+**Mobile**: Present guided steps via `AskUserQuestion` -> user acts -> verify via curl/DB/logs.
+
+Browser tool priority (skipping without attempting is PROHIBITED):
+1. `agent-browser` (PRIMARY) — `open <url>` -> `snapshot -i` -> `click/fill @ref` -> re-snapshot
+2. Playwright (FALLBACK) — if agent-browser unavailable/errors
 3. Direct HTTP/API (LAST RESORT) — mark untestable parts as "guided"
 
-**Guided mode**: No browser automation. User performs all UI interactions. Agents only seed DB, configure services, and verify outcomes.
+Reports back: PASS/FAIL per step, screenshots, network/console findings, backend verification, logs.
 
-- `mcp-add` for `safe: true` MCPs relevant to suite. NEVER `safe: false`.
-- **External CLI gate**: per `externalServices[]` where `cli.available && !cli.blocked` and plan depends on it → `AskUserQuestion` once per service using `userPromptTemplate`. Declined → "guided". Approved → `cli.approvedThisRun: true`, only `allowedOperations`. NEVER use when `cli.blocked`.
+### 5. Guided Happy-Path (fg, optional, if user approved)
+Runs LAST — after autonomous suites. No browser automation. Category 1 only.
+For each test: seed DB -> present steps via `AskUserQuestion` (MANDATORY — text output PROHIBITED) with options `["Done - ready to verify", "Skip this test", "Issue encountered"]` -> user acts -> verify via DB/API/logs -> PASS/FAIL.
 
-**Anomaly detection** — agents watch for: duplicate records, unexpected DB changes, warning/error logs, slow queries/missing indexes, orphaned references, auth token anomalies, unexpected response fields/status codes.
+### 6. Regression Agent (fg, LAST)
+Run `testing.unitTestCommand` once. Report total/passed/failed/skipped. Never interleaved with other suites.
 
-**DB consistency checks** — agents execute inline checks per embedded DB Consistency Check Protocol: POST_SEED (after seeding), POST_TEST (after execution), POST_CLEANUP (after cleanup). Each produces a structured result (PASS/WARN/FAIL) reported alongside suite PASS/FAIL. Baseline captured before first DB modification.
-
-**Finding verification** (mandatory): Before reporting any finding: (1) identify source code, (2) read to confirm real behavior vs test artifacts, (3) distinguish real vs agent-created, (4) report only confirmed. Unconfirmed → `Severity: Unverified` in `### Unverified` subsection.
-
-**API Response Security Inspection** — analyze ALL responses for:
-- *Exposed identifiers*: internal DB IDs, sequential/guessable IDs, sensitive refs (paths, internal URLs)
-- *Leaked secrets*: API keys, tokens beyond scope, passwords/hashes, env vars in errors, cloud secrets
-- *Personal data* (multi-regulation): PII (names, emails, phones, addresses, govt IDs, DOB), sensitive (health/financial/biometric/racial/political/religious/sexual/genetic), regulations (LGPD, GDPR, CCPA/CPRA, HIPAA, others)
-
-Verify against source: read model/serializer/DTO to confirm field exists in real schema — not test data. False positives MUST NOT be reported. Each finding: Severity, Regulatory impact, Exploitability, Compliance risk → `### API Response Security` subsection.
-
-**Execution flow**:
-1. For each suite, prepare prompt including: env details, steps, verification queries, teardown, Feature Context Document, credential **role name**, browser tools/status, Service Readiness Report (updated by service restoration agent), related project log commands, test flow type, DB lifecycle:
-   - Pre-test: `migrationCommand` → seed (`autonomous`: create with `testDataPrefix`; `command`: run `seedCommand`)
-   - **Seed schema analysis gate** (MANDATORY — before ANY database write): The plan MUST embed the seed schema discovery protocol. Agents must complete schema analysis and report discovered schemas BEFORE executing any insert/seed operation. Proceeding without schema analysis is PROHIBITED.
-   - **Seed schema discovery** (mandatory for autonomous seeding — applies to ALL databases in the E2E flow, including related projects): Before inserting into ANY collection/table: (1) query for a real document/row (`findOne`/`SELECT * LIMIT 1` without test prefix filter) to use as schema template, (2) if empty, read the backend service code that creates documents in that collection (look for `insertOne`/`find_one_and_update`/`INSERT`/ORM create calls), (3) mirror the discovered schema exactly — never invent fields or change types (ObjectId vs string, Date vs string, etc.), (4) only add `_testPrefix` marker as extra field, (5) for related project collections: use the connection command from `relatedProjects[]` config or the cross-project seed map in the Feature Context Document. After all seeds (main + related): hit the API read endpoints to verify serialization before proceeding.
-   - Verification: `connectionCommand` for queries
-   - Post-test: `cleanupCommand` or clean `testDataPrefix` data. Order: migrate → capture dbBaseline → seed → POST_SEED check → test → POST_TEST check → cleanup → POST_CLEANUP check.
-   - Browser: include workflow + priority chain. "Do NOT skip browser suites."
-2. Strictly sequential:
-   ```
-   for each suite in approved_suites (in order):
-       1. Spawn ONE general-purpose subagent (foreground)
-       2. Provide full context in prompt
-       3. BLOCK — foreground = automatic blocking
-       4. Receive results directly
-       5. Record PASS/FAIL
-       6. Check related project logs for errors (using log commands from Phase 2, with --since timestamp)
-       7. Proceed to next
-   ```
-   Prohibited: multiple concurrent subagents, parallel execution, main-conversation execution.
-3. PASS/FAIL + anomalies after each suite
-4. **Live E2E suites (conditional — only if plan contains liveE2eApproved: true)**:
-   - Runs after all autonomous suites complete and results are recorded
-   - CLI gate: per service, AskUserQuestion using embedded userPromptTemplate. Declined → skip. Approved → cli.approvedThisRun: true.
-   - Sandbox re-verification before first CLI call. Production detected → abort for that service.
-   - Sequential: one foreground subagent per suite, full context including CLI details and allowed/prohibited operations
-   - Record PASS/FAIL, check related project logs
-5. **Guided happy-path tests (conditional — only if plan contains guidedHappyPathApproved: true)**:
-   - Runs last — after autonomous and live E2E (if any)
-   - For each test: seed DB → present steps via AskUserQuestion (MANDATORY — text output PROHIBITED) with options ["Done", "Skip", "Issue"] → user acts → verify via DB/API/logs → PASS/FAIL
-   - No browser automation. No parallel agents. Category 1 only.
-6. **Audit summary**: agents spawned, suites executed, docker exec count, cleanup status
+### Critical Execution Rules
+- Never create batch scripts — each test explicitly passed to subagent
+- Explicit data seeding instructions (table, fields, values, commands) — never guess
+- Each subagent receives applicable security checklist items only
+- Each subagent receives log file paths to check after execution
+- Orchestrator checks logs between suites
+- **Credential assignment**: Rotate role names from `testCredentials` across suites — pass role name only, never values
+- **Finding verification** (mandatory): identify source code -> read to confirm -> distinguish real vs agent-created -> report only confirmed. Unconfirmed -> `Severity: Unverified` in `### Unverified`
+- **Anomaly detection**: duplicate records, unexpected DB changes, warning/error logs, slow queries, orphaned references, auth anomalies, unexpected response fields/status codes
+- Prohibited: multiple concurrent subagents, parallel execution, main-conversation execution
 
 ## Phase 5 — Results & Docs
 
-**Objective**: Process results, generate documentation, clean up test data.
+**Fix cycle**: Runtime-fixable issues -> verify real (re-read error, retry once, confirm root cause) -> spawn subagent to fix -> re-run suite -> max 3 cycles. Code bug -> document + ask user.
 
-**Fix cycle**: Runtime-fixable (env/container/stuck job) → before attempting any fix, verify the issue is real: re-read error output, check if the failure is transient (retry once), confirm root cause in logs/config. Only proceed with a fix after confirming the issue genuinely requires intervention. Spawn general-purpose subagent (foreground) to fix → re-run suite → max 3 cycles. Code bug → document (file, line, expected vs actual) → ask user.
+**Documentation**: Spawn subagent (foreground). Timestamp via `date -u +"%Y-%m-%d-%H-%M-%S"`. Pattern: `{timestamp}_{semantic-name}.md`. Read `references/templates.md`. Four doc types: test-results (always — rename header to "Test Results"), pending-fixes (bugs/infra), pending-guided-tests (browser/visual/physical), pending-autonomous-tests (identified but not run). Include service log analysis, DB consistency results (if WARN/FAIL).
 
-**Documentation**: Spawn general-purpose subagent (foreground). Timestamp via `date -u +"%Y-%m-%d-%H-%M-%S"`. Pattern: `{timestamp}_{semantic-name}.md`. Read `references/templates.md` first. Four doc types: test-results (always generated — the record is essential for regression tracking even when all tests pass), pending-fixes (bugs/infra issues), pending-guided-tests (browser/visual/physical + guided happy-path tests if approved), pending-autonomous-tests (identified but not run). Re-runs → append "Re-run" section. If live E2E or guided happy-path tests were executed, include their results in the test-results doc under dedicated suite sections. The documentation subagent receives all test results (autonomous + live E2E + guided) and generates unified output. If any DB consistency check returned WARN or FAIL, include `### DB Consistency` subsection in test-results per the template.
+**Cleanup**: Spawn subagent (foreground). Remove `testDataPrefix` data only. Never touch pre-existing. Kill log capture processes. Remove `/tmp/test-logs-{sessionId}/`. Verify cleanup. Log actions.
 
-**Cleanup**: Spawn general-purpose subagent (foreground). Remove `testDataPrefix` data only. Never touch pre-existing. Log actions. Verify with DB query.
+**DB consistency final check**: Run POST_CLEANUP verification. Zero test records must remain.
 
 ## Phase 6 — Finalize
 
@@ -524,34 +359,37 @@ Verify against source: read model/serializer/DTO to confirm field exists in real
 | Plan before execution | Phase 3 plan mode required before any test execution |
 | Subagents only | All execution via Agent(subagent_type: "general-purpose"). Main-conversation execution PROHIBITED |
 | Model inheritance | Subagents inherit from main conversation — ensure Opus is set |
-| Strictly sequential | One agent at a time in Phases 4-5. Spawn → complete → shut down → next |
+| Strictly sequential | One agent at a time in Phases 4-5. Spawn -> complete -> shut down -> next |
 | Explore agents read-only | No file edits or state-modifying commands |
 | UTC timestamps | Via `date -u` only, never guess |
 | No unsafe MCPs | Never activate `safe: false` MCPs |
-| External CLI gating | Blocked when `cli.blocked`. Per-run user confirmation. `allowedOperations` only. `prohibitedFlags`/`prohibitedOperations` always blocked |
+| External CLI gating | Blocked when `cli.blocked`. Per-run user confirmation. `allowedOperations` only |
 | No dynamic commands | Only execute verbatim config commands — no generation/concatenation/interpolation |
+| Integration tests = curl | Always `curl` — never mock, never script-based test runners |
+| E2E tests = browser | `agent-browser` (primary) or Playwright (fallback) — never test production |
+| Unit tests = regression | Run ONCE at the end — never during integration/E2E suites |
+| Data seeding = explicit | Never guess field names, values, or schemas. Seed schema discovery mandatory |
+| Each test = one subagent | Never batch scripts — each test passed individually to subagent |
+| Service logs monitored | Log capture active during all test phases. Check between suites |
 | Finding verification | Verify against source code before reporting any finding |
 | Idempotent test data | Prefix with `testDataPrefix`. Skip or reset if exists |
-| Seed schema discovery | Before seeding any DB (main or related project): query real doc or read service code for schema. Mirror exactly — never invent fields or change types. Verify via API after seeding |
 | External API care | Delays between calls, sandbox modes, minimize requests |
 | `_autonomous/` reading | Summary + Issues Found sections only |
 | Capabilities auto-detected | Never ask user to configure manually |
 | Guided = user augmentation | No browser automation in guided mode — user performs all actions |
-| Guided = happy path only | Category 1 only in guided mode — categories 2-9 autonomous-only |
+| Guided = happy path only | Category 1 only in guided mode — categories 2-8 autonomous-only |
 | Tool loading gate | Browser tools need pre-plan approval in autonomous mode, never in guided |
 | Plan self-containment | All context embedded in plan for post-reset survival — no "see above" references |
-| Live E2E = sandbox only | Live E2E suites require sandbox/test mode. Re-verified at runtime before CLI calls |
-| Live E2E = post-autonomous | Live E2E runs after all autonomous (mocked) suites complete |
-| Guided happy path = post-all | Guided happy-path runs last — after autonomous and live E2E |
+| Guided happy path = post-all | Guided happy-path runs last — after all autonomous suites |
 | Post-discovery prompts | Standard mode only — skipped when `guided` arg or regression mode active |
-| Documentation in every run | Test-results doc generated for every run. Embedded in plan execution protocol so it survives context reset |
-| DB consistency inline | POST_SEED, POST_TEST, POST_CLEANUP checks within Phase 4 per suite. Baseline before first DB write. Results in test-results |
+| Documentation in every run | Test-results doc generated for every run. Embedded in plan execution protocol |
+| DB consistency inline | POST_SEED, POST_TEST, POST_CLEANUP checks within Phase 4 per suite |
 
 ## Operational Bounds
 
 | Bound | Constraint |
 |---|---|
-| Max agents | Approved test suites + one service restoration agent + one setup agent |
+| Max agents | Approved test suites + one service restoration agent + one setup agent + one regression agent |
 | Max fix cycles | 3 per suite |
 | Health check timeout | 30s per service |
 | Capability cache | `rescanThresholdDays` (default 7 days) |
@@ -564,9 +402,7 @@ Verify against source: read model/serializer/DTO to confirm field exists in real
 | External CLI scope | `allowedOperations` only. Per-run confirmation. Blocked when `cli.blocked` |
 | System commands | `which`, `docker compose ps`, `git branch`/`diff`/`log`, `test -f`, `find . -maxdepth 3 -name "CLAUDE.md" -type f`, `date -u`, `curl -sf` localhost, `python3 -c` json/hashlib only |
 | External downloads | Docker images via user's compose only. Playwright browsers if present. No other downloads |
-| Data access | Outside project: `~/.claude/settings.json` (RO), `~/.claude/trusted-configs/` (RW, one hash), `~/.claude/CLAUDE.md` (RO). `.env` scanned for patterns only — values never stored/logged |
-| Trust boundaries | Config SHA-256 verified out-of-repo. Untrusted inputs → analysis only → plan → user approval. No interpolation into commands |
-| Live E2E scope | Eligible services only (cli.available && !cli.blocked && feature-relevant). allowedOperations only. Runtime sandbox re-verification |
+| Data access | Outside project: `~/.claude/settings.json` (RO), `~/.claude/trusted-configs/` (RW), `~/.claude/CLAUDE.md` (RO). `.env` scanned for patterns only |
+| Trust boundaries | Config SHA-256 verified out-of-repo. Untrusted inputs -> analysis only -> plan -> user approval |
 | Guided happy path scope | Category 1 only. No browser automation. Sequential. Runs last |
-| Post-discovery prompts | Standard mode only — skipped for `guided` arg or regression mode |
 | Documentation output | Minimum 1 doc (test-results) per run. Embedded in execution protocol for post-reset survival |
