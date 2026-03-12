@@ -1,6 +1,6 @@
 # Autonomous Fixes — Output Templates
 
-Reference file for Phase 5 documentation. Follow these structures exactly when generating output.
+Reference file for Phase 4b documentation. Follow these structures exactly when generating output.
 
 **Filename convention**: Get UTC timestamp by running `date -u +"%Y-%m-%d-%H-%M-%S"` in Bash (never guess). Pattern: `{YYYY-MM-DD-HH-MM-SS}_{semantic-name}.md`
 
@@ -32,7 +32,7 @@ Reference file for Phase 5 documentation. Follow these structures exactly when g
 | Source | `{path to pending-fixes or test-results doc}` |
 | Status | {RESOLVED / PARTIAL / UNABLE} |
 | Files Modified | `{path1}`, `{path2}` |
-| Original Test IDs | {1.2, 4.1 — from source finding's Test ID field, or "N/A" for V-prefix} |
+| Original Test IDs | {suite.test numbers from source test-results document, e.g. Suite 1 Test 2 = 1.2 — comma-separated, or "N/A" for V-prefix} |
 | Verification | {PASS / FAIL} |
 
 **What was done**: {description of the fix applied}

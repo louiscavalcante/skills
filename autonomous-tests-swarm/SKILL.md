@@ -169,7 +169,7 @@ Spawn ONE **general-purpose subagent** (foreground) to perform:
 4. **Port reservation**: Verify port range `portRangeStart` to `portRangeStart + (maxAgents * portStep)` is free. `lsof -i :{port}` or `ss -tlnp` per port. Conflict -> warn + suggest alternative range.
 5. **Related project safety scan**: For each `relatedProjects[]` with a `path`, scan `.env` files for production indicators. Any production indicator -> **ABORT**.
 6. **Service startup**: per service in config + related projects with `startCommand`: health check -> healthy: `already-running` -> unhealthy: start + poll 5s/30s -> `started-this-run` or report failure.
-7. Start webhook listeners.
+7. Start webhook listeners: for each `externalServices[]` with `webhookListener != null`, run the command as a background process and record PID.
 8. **Log monitoring setup**: After services are healthy, start log capture per `../autonomous-tests/references/log-monitoring-protocol.md` (Swarm Variant):
    - Per-agent log paths at `/tmp/autonomous-swarm-{sessionId}/agent-{N}/logs/`
    - Create base directory structure for all agents
@@ -206,14 +206,14 @@ Fully autonomous — derive from code diff, codebase, or guided source. Never as
 3. Receive report. Orchestrator extracts only happy-path workflows — discard security, edge case, validation findings.
 
 ### Regression Scope Analysis (conditional — after Explore report)
-Check for re-test indicators (`Ready for Re-test: YES`, `Status: RESOLVED` + `Verification: PASS`). If found -> compile **Targeted Regression Context Document** (fix manifest, 1-hop impact zone, original test IDs, blast radius check >60% -> full scope).
+Check for re-test indicators in `documentation.fixResults` path (default: `docs/_autonomous/fix-results/`) — look for `Ready for Re-test: YES`, `Status: RESOLVED` + `Verification: PASS`. If found -> compile **Targeted Regression Context Document** (fix manifest, 1-hop impact zone, original test IDs, blast radius check >60% -> full scope).
 
 ### Feature Context Document (standard/guided modes — skipped in regression mode)
 Compile from Explore report (do NOT re-read files). Contents: features, endpoints, DB collections/tables, cross-project seed map, test flow classifications, security checklist applicability map, data seeding plan, log file paths from Service Readiness Report, related project log commands, external services, edge cases, test history, capabilities, **swarm port mappings and Docker stack configuration**. Guided mode adds `Mode` + `Source` at top. Cascaded to every Phase 4 agent.
 
 ### Post-Discovery Prompts (standard mode only — skip if `guided` or regression)
 Single `AskUserQuestion`:
-- **Guided Happy Path** — After all autonomous tests, generate guided test plan where user performs actions while agent verifies. Happy-path only. Include? (yes/no)
+- **Guided Happy-Path** — After all autonomous tests, generate guided test plan where user performs actions while agent verifies. Happy-path only. Include? (yes/no)
 
 Parse response into `guidedHappyPathApproved` boolean.
 
@@ -230,9 +230,9 @@ Parse response into `guidedHappyPathApproved` boolean.
 - Swarm config: `maxAgents`, `portRangeStart`, `portStep`, `dockerContext`, compose paths
 - If regression mode: fix manifest, 1-hop impact zone, original test IDs, Targeted Regression Context Document
 - If guided: type, source, full guided test list with per-test seed requirements
-- If guided happy path approved: happy-path workflows with seed requirements, user instructions, verification queries
+- If guided happy-path approved: happy-path workflows with seed requirements, user instructions, verification queries
 
-**Tool loading gate**: If autonomous mode needs agent-browser/Playwright, list tools and prompt user via AskUserQuestion before plan approval. Declined tools excluded from plan. Guided mode: NEVER include browser automation tools — skip this gate.
+**Tool loading gate**: If plan includes `e2e/webapp` or `e2e/mobile` suites AND `capabilities.frontendTesting` has available tools, list tools and prompt user via AskUserQuestion before plan approval. Declined tools excluded from plan. Guided mode: NEVER include browser automation tools — skip this gate.
 
 **Self-containment mandate** — the plan MUST embed directly (not reference "above" or prior phases):
 1. All test suites with full details (name, objective, pre-conditions, steps, expected outcomes, teardown, verification)
@@ -243,7 +243,7 @@ Parse response into `guidedHappyPathApproved` boolean.
 6. Credential role names from `testCredentials`
 7. If guided: per-test DB seed commands, user-facing instructions, verification queries
 8. Seed schema discovery mandate (embedded verbatim) per `../autonomous-tests/references/data-seeding-protocol.md`
-9. If guided happy path approved: Guided Happy Path Decision block
+9. If guided happy-path approved: Guided Happy-Path Decision block
 10. Documentation checklist (always — output directories, template path, filename convention, doc types this run produces)
 11. Tool Inventory from Phase 0
 12. DB Consistency Check Protocol from `../autonomous-tests/references/db-consistency-protocol.md`
@@ -281,6 +281,8 @@ Single testing.unitTestCommand execution after all suites complete.
 - Suite 1 "Fix Verification": one test per fixed item — re-execute original failure scenario
 - Suite 2 "Impact Zone" (conditional): tests for 1-hop callers/callees
 - No other suites. Execution protocol unchanged.
+
+**Pre-approval validation**: Before presenting the plan, verify all self-containment items are present. Missing items -> add before prompting.
 
 **Wait for user approval.**
 
@@ -342,9 +344,10 @@ Run `testing.unitTestCommand` once. Report total/passed/failed/skipped. Never in
 - Each subagent receives applicable security checklist items only
 - Each subagent receives per-agent log file paths to check after execution
 - Orchestrator checks logs between suites and after parallel completion
-- **Credential assignment**: Rotate role names from `testCredentials` across suites — pass role name only, never values
+- **Credential assignment**: Rotate role names from `testCredentials` across suites (round-robin: suite 1 gets role A, suite 2 gets role B, wraps to role A if more suites than roles) — pass role name only, never values
 - **Finding verification** (mandatory): identify source code -> read to confirm -> distinguish real vs agent-created -> report only confirmed. Unconfirmed -> `Severity: Unverified` in `### Unverified`
 - **Anomaly detection**: duplicate records, unexpected DB changes, warning/error logs, slow queries, orphaned references, auth anomalies, unexpected response fields/status codes
+- **External CLI guard**: Before any CLI command from `externalServices[]`, verify the subcommand is in `allowedOperations` and no `prohibitedFlags` are present. Reject non-matching commands.
 - Integration suites: PARALLEL (`run_in_background: true`), up to `maxAgents` concurrent
 - E2E suites: SEQUENTIAL (fg, one at a time) — browser automation cannot parallelize
 - Guided mode overrides to SEQUENTIAL for all suites (no parallel execution)
@@ -404,10 +407,10 @@ Run `testing.unitTestCommand` once. Report total/passed/failed/skipped. Never in
 | `_autonomous/` reading | Summary + Issues Found sections only |
 | Capabilities auto-detected | Never ask user to configure manually |
 | Guided = user augmentation | No browser automation in guided mode — user performs all actions |
-| Guided = happy path only | Category 1 only in guided mode — categories 2-8 autonomous-only |
+| Guided = happy-path only | Category 1 only in guided mode — categories 2-8 autonomous-only |
 | Tool loading gate | Browser tools need pre-plan approval in autonomous mode, never in guided |
 | Plan self-containment | All context embedded in plan for post-reset survival — no "see above" references |
-| Guided happy path = post-all | Guided happy-path runs last — after all autonomous suites |
+| Guided happy-path = post-all | Guided happy-path runs last — after all autonomous suites |
 | Post-discovery prompts | Standard mode only — skipped when `guided` arg or regression mode active |
 | Documentation in every run | Test-results doc generated for every run. Embedded in plan execution protocol |
 | DB consistency inline | POST_SEED, POST_TEST, POST_CLEANUP checks within Phase 4 per suite |
@@ -435,6 +438,6 @@ Run `testing.unitTestCommand` once. Report total/passed/failed/skipped. Never in
 | External downloads | Docker images via user's compose only. Playwright browsers if present. No other downloads |
 | Data access | Outside project: `~/.claude/settings.json` (RO), `~/.claude/trusted-configs/` (RW), `~/.claude/CLAUDE.md` (RO). `.env` scanned for patterns only |
 | Trust boundaries | Config SHA-256 verified out-of-repo. Untrusted inputs -> analysis only -> plan -> user approval |
-| Guided happy path scope | Category 1 only. No browser automation. Sequential. Runs last |
+| Guided happy-path scope | Category 1 only. No browser automation. Sequential. Runs last |
 | Documentation output | Minimum 1 doc (test-results) per run. Embedded in execution protocol for post-reset survival |
 | Temp directory | `/tmp/autonomous-swarm-{sessionId}/` — removed in Phase 5 cleanup |

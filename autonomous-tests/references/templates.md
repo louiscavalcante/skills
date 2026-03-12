@@ -1,6 +1,6 @@
 # Autonomous Tests — Output Templates
 
-Reference file for Phase 7 documentation. Follow these structures exactly when generating output.
+Reference file for Phase 5 documentation. Follow these structures exactly when generating output.
 
 **Filename convention**: Get UTC timestamp by running `date -u +"%Y-%m-%d-%H-%M-%S"` in Bash (never guess). Pattern: `{YYYY-MM-DD-HH-MM-SS}_{semantic-name}.md`
 

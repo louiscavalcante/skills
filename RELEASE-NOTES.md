@@ -1,5 +1,33 @@
 # Release Notes
 
+## v3.0.1 — Specification Clarity & Cross-Skill Consistency
+
+22 fixes across all 3 skills addressing specification gaps, inconsistencies, and stale references.
+
+### autonomous-fixes
+- **Fixed**: Config v5→v6 migration logic removed — migration ownership belongs to autonomous-tests only. autonomous-fixes now gates on version 6 and stops if outdated.
+- **Fixed**: README phase numbering (was 9 phases, now matches SKILL.md's 5-phase structure: 0-4 with 4a/4b/4c substeps)
+- **Fixed**: README incorrectly claimed parallel execution — corrected to "strictly sequential"
+- **Added**: Resume detection documented in README (Phase 0 skip-to-Phase-4 branch)
+- **Added**: Tool Inventory documented in README
+- **Added**: Setup agent skip flow for ALREADY_RESOLVED/FALSE_POSITIVE items with FALSE_POSITIVE detection rules
+- **Added**: V-prefix security checklist scope clarified — embed only violated items (2-5 of 17), not full list
+- **Added**: Fix outcome definitions (RESOLVED/PARTIAL/UNABLE) with clear criteria
+- **Fixed**: Agent type ambiguity in Phase 4a/4b — now explicitly "general-purpose subagent (foreground)"
+- **Fixed**: Log Path Inventory extraction no longer conditional on services running (config values, not runtime checks)
+- **Fixed**: templates.md phase reference (was "Phase 5", now "Phase 4b")
+- **Fixed**: Original Test IDs format clarified (suite.test numbering, e.g. Suite 1 Test 2 = 1.2)
+
+### autonomous-tests + autonomous-tests-swarm (cross-cutting)
+- **Fixed**: Webhook listener spec — now explicit: "for each externalServices[] with webhookListener != null, run as background process and record PID"
+- **Fixed**: Tool loading gate — condition clarified: "if plan includes e2e/webapp or e2e/mobile suites AND capabilities.frontendTesting has available tools"
+- **Fixed**: Regression file path — now specifies `documentation.fixResults` path (default: `docs/_autonomous/fix-results/`)
+- **Added**: Credential rotation algorithm defined (round-robin with wrap-around)
+- **Added**: External CLI guard enforcement step (verify subcommand in allowedOperations, reject prohibitedFlags)
+- **Added**: Pre-approval plan validation step (verify all self-containment items present before prompting)
+- **Fixed**: templates.md phase reference in autonomous-tests (was "Phase 7", now "Phase 5")
+- **Fixed**: Terminology standardized — "happy path" → "happy-path" (hyphenated compound adjective)
+
 ## v3.0.0 — Test Taxonomy Overhaul, Chrome DevTools, Log Monitoring
 
 - **BREAKING**: Config schema v5 → v6 (auto-migrates)

@@ -187,26 +187,20 @@ See [`references/templates.md`](references/templates.md) for exact output format
 ## How It Works
 
 ```
-Phase 0: Config       ← Validate autonomous-tests config, scan for findings
+Phase 0: Bootstrap    ← Validate config, scan for findings, tool inventory
 Phase 1: Selection    ← Parse findings, present for user selection
 Phase 2: Plan         ← Read source code, design fixes (you approve)
-Phase 3: Execute      ← subagents apply fixes
-Phase 4: Verify       ← Confirm fixes work, security checks for V-prefix
-Phase 5: Document     ← Generate fix-results, update pending-fixes/test-results
-Phase 6: Loop Signal  ← Signal readiness for re-testing
-Phase 7: Doc Cleanup  ← Offer removal of fully-resolved source docs
-Phase 8: Advisory     ← Remind user to /clear before next skill
+Phase 3: Execution    ← Subagents apply fixes sequentially
+Phase 4: Results      ← 4a: Verify | 4b: Document | 4c: Loop signal + cleanup
 ```
 
-- **Phase 0** validates the shared config and scans `_autonomous/` directories for findings.
+- **Phase 0** validates the shared config (version 6 required), scans available tools (skills, agents, MCPs, CLIs), and scans `_autonomous/` directories for findings. If previously applied fixes are detected in the working tree (via git diff), the skill skips directly to Phase 4 (verification and documentation).
 - **Phase 1** parses all findings, assigns IDs (V/F/T/G/A prefixes), deduplicates, and presents for selection. No source code is read until after selection.
 - **Phase 2** reads source code for selected items, traces code paths, performs dependency analysis, and designs fixes. Vulnerability items get enhanced context with full input-output tracing, regulatory assessment, and security-aware remediation design.
-- **Phase 3** spawns subagents to execute fixes. Independent items run in parallel; dependent chains run sequentially.
-- **Phase 4** verifies each fix. V-prefix items get additional security verification with variant payloads and hardening checks.
-- **Phase 5** generates fix-results document, appends resolution blocks to pending-fixes, and annotates test-results.
-- **Phase 6** summarizes results and signals re-test readiness for the autonomous-tests loop.
-- **Phase 7** offers to remove source documents (pending-fixes, test-results) when all their findings are fully resolved. Fix-results are never removed — they're the permanent record.
-- **Phase 8** displays a context reset advisory reminding you to run `/clear` before invoking another skill.
+- **Phase 3** spawns subagents to execute fixes. Fixes run strictly sequentially — one subagent at a time.
+- **Phase 4a** verifies each fix. V-prefix items get additional security verification with variant payloads and hardening checks.
+- **Phase 4b** generates fix-results document, appends resolution blocks to pending-fixes, and annotates test-results.
+- **Phase 4c** summarizes results, signals re-test readiness, offers to remove fully-resolved source documents (fix-results are never removed — they're the permanent record), and displays a `/clear` reminder.
 
 [Back to top](#autonomous-fixes)
 

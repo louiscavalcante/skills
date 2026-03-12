@@ -75,10 +75,10 @@ Print resolved scope, then proceed without waiting.
 
 **Step 1 — Config Validation**: This skill reuses `.claude/autonomous-tests.json`.
 1. `test -f .claude/autonomous-tests.json` → if missing, **STOP**: "Run `/autonomous-tests` first."
-2. Read config. Validate `version` equals `6`. If `version` is `5` -> auto-migrate: add `logFile: null` to each `project.services[]`, add `logCommand: null` to each `relatedProjects[]`, add `frontendType: "none"`, `chromeDevtools: false`, `e2eUrl: null`, `browserPreference: "agent-browser"`, add `frontendIndicators`, remove deprecated `liveE2eEligibility` and `credentialType` fields, bump to `6`.
+2. Read config. Validate `version` equals `6`. If `version` < `6` -> **STOP**: "Config is v{version}. Run `/autonomous-tests` first to auto-migrate to v6."
 3. Verify config trust: compute hash via **Config hash method**, check against `~/.claude/trusted-configs/`. If untrusted → show config (redact `testCredentials`), confirm via `AskUserQuestion`.
 4. Ensure `documentation.fixResults` exists → if missing, add `"fixResults": "docs/_autonomous/fix-results"`, save.
-5. **Extract log file paths**: If services are running, collect log file paths from `project.services[].logFile` and log commands from `relatedProjects[].logCommand`. Store as **Log Path Inventory** for Phase 3 fix agents.
+5. **Extract log file paths**: Collect log file paths from `project.services[].logFile` and log commands from `relatedProjects[].logCommand` (these are config values — extract regardless of service status). Store as **Log Path Inventory** for Phase 3 fix agents.
 6. If config modified in step 4 or 5 → re-stamp trust using **Config hash method**.
 
 **Step 2 — CLAUDE.md Deep Scan**: Delegate to Explore agent. Scan CLAUDE.md files up to 3 levels deep, plus `~/.claude/CLAUDE.md` and `.claude/CLAUDE.md`. Return discovered file list. Cache for Phase 2.
@@ -136,7 +136,7 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
 7. Tool Inventory from Phase 0 — full inventory with per-phase recommendations so fix agents know which tools are available without re-scanning.
 8. DB Consistency Check Protocol (POST_FIX section only) from `autonomous-tests/references/db-consistency-protocol.md` — embedded verbatim so fix agents execute inline checks without needing the reference file post-reset.
 9. Log Path Inventory from Phase 0 Step 5 — service log file paths and related project log commands so fix agents can check logs after fix verification.
-10. Security checklist items (from `../autonomous-tests/references/security-checklist.md`) applicable to V-prefix items — embedded per finding so fix agents verify security compliance without needing the reference file post-reset.
+10. Security checklist items (from `../autonomous-tests/references/security-checklist.md`) applicable to V-prefix items — embed only the subset of items the vulnerability violates and the fix must satisfy (typically 2-5 of 17, not the full list) so fix agents verify security compliance without needing the reference file post-reset.
 11. Service startup commands for all project + relatedProject services — so fix agents can restart services after applying fixes if needed.
 
 - Execution Protocol (embed verbatim — orchestrator uses this after context reset):
@@ -170,10 +170,10 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
   8. [ ] 4c: `/clear` reminder printed
   ```
 
-**Setup agent** (MANDATORY): Spawn setup subagent (general-purpose, foreground) to read all source files referenced by findings, compile Fix Context Documents, read discovered CLAUDE.md files for architecture context, return results. **Orchestrator MUST embed the setup agent's Fix Context Documents into the plan text** — condensed but complete.
+**Setup agent** (MANDATORY): Spawn setup subagent (general-purpose, foreground) to read all source files referenced by findings, compile Fix Context Documents, read discovered CLAUDE.md files for architecture context, return results. **Orchestrator MUST embed the setup agent's Fix Context Documents into the plan text** — condensed for token efficiency but complete enough for post-reset reconstruction.
 
 **Fix Context Document per item**:
-1. **Verify finding is real and still reproduces** (MANDATORY gate — do NOT skip): Re-read the source code at the reported location. Check if the code has changed since the finding was reported. Run the failing scenario or check the vulnerable path. If code changed and issue gone → `Status: ALREADY_RESOLVED`, skip. If the finding was based on a misunderstanding of the code logic → `Status: FALSE_POSITIVE`, skip. Only proceed to fix design after confirming the issue genuinely exists and requires intervention.
+1. **Verify finding is real and still reproduces** (MANDATORY gate — do NOT skip): Re-read the source code at the reported location. Check if the code has changed since the finding was reported. Run the failing scenario or check the vulnerable path. If code changed and issue gone → `Status: ALREADY_RESOLVED`, exclude from plan. If the finding was based on a misunderstanding of the code logic (reported code path is unreachable, vulnerability requires conditions prevented by upstream middleware, or behavior is by design per CLAUDE.md/inline comments) → `Status: FALSE_POSITIVE`, exclude from plan. Report excluded items to Orchestrator with status and reason — do not generate Fix Context Documents for them. Only proceed to fix design after confirming the issue genuinely exists and requires intervention.
 2. Read referenced files (endpoint, model, test) — record file paths
 3. Trace code path: input → processing → output — summarize path
 4. Identify root cause — state explicitly
@@ -228,17 +228,17 @@ Verify fixes, generate documentation, offer source cleanup.
 
 ### 4a. Verification
 
-Delegate to agents.
+Delegate to general-purpose subagent (foreground).
 
 **Standard**: confirm modified files, run unit tests, re-execute failing scenario. If fix modified DB-interacting code, verify POST_FIX check passed. Include result in fix-results.
 
 **V-prefix**: re-test original attack vector (must block), test variant payloads, verify no auth bypass/privilege escalation, verify hardened error responses, verify sensitive data removal, check rate limiting.
 
-Mark each: **RESOLVED** / **PARTIAL** / **UNABLE**.
+Mark each: **RESOLVED** (root cause fixed, all verification passes) / **PARTIAL** (symptom mitigated but root cause remains or side effects exist) / **UNABLE** (requires architectural changes, missing access, or manual intervention beyond agent capability).
 
 ### 4b. Documentation
 
-Delegate to agent. Timestamp via `date -u +"%Y-%m-%d-%H-%M-%S"`. Read `references/templates.md`.
+Delegate to general-purpose subagent (foreground). Timestamp via `date -u +"%Y-%m-%d-%H-%M-%S"`. Read `references/templates.md`.
 
 - **Fix-results**: always generated at `documentation.fixResults` path (metadata, per-item results, next steps)
 - **Resolution blocks**: append `### Resolution` to pending-fixes entries
