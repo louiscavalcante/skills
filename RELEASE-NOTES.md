@@ -1,5 +1,16 @@
 # Release Notes
 
+## v3.0.2 — Remove PreToolUse Hooks & Setup Scripts
+
+### Removed
+- **Skill-scoped PreToolUse hooks** (all 3 skills): Removed `ExitPlanMode` and `AskUserQuestion` hook configurations from SKILL.md frontmatters. These hooks caused bugs where plan mode gets stuck. The tools remain available as built-in tools — only the hook configurations are removed.
+- **Setup scripts** (all 3 skills): Deleted `scripts/setup-hook.sh` from autonomous-tests, autonomous-fixes, and autonomous-tests-swarm. The `npx skills add` command is sufficient for installation.
+- **`hooks/hooks.json`**: Deleted the shared hook configuration file and `hooks/` directory.
+- **Phase 0 prerequisites check** (all 3 skills): Removed Step 0 that checked for hook presence in global settings — no longer applicable.
+- **Hook references** (autonomous-fixes): Removed `(hook-forced)` parenthetical and `AskUserQuestion hook ensures selection` rule.
+- **README setup sections** (all 4 READMEs): Removed setup script instructions, manual install hook JSON blocks, and `scripts/` from project structure trees.
+- **CLAUDE.md directory tree**: Removed `hooks/` and `scripts/` entries.
+
 ## v3.0.1 — Specification Clarity & Cross-Skill Consistency
 
 22 fixes across all 3 skills addressing specification gaps, inconsistencies, and stale references.

@@ -17,15 +17,15 @@ skills/
 ├── autonomous-tests/      ← Skill: autonomous E2E test runner
 │   ├── README.md          ← Human-facing docs
 │   ├── SKILL.md           ← Claude-facing skill definition
-│   ├── references/        ← Config schema, templates
-│   └── scripts/           ← Setup scripts
+│   └── references/        ← Config schema, templates
 ├── autonomous-fixes/      ← Skill: autonomous fix runner (test-fix loop)
 │   ├── README.md          ← Human-facing docs
 │   ├── SKILL.md           ← Claude-facing skill definition
-│   ├── references/        ← Finding parser, templates
-│   └── scripts/           ← Setup scripts
-└── hooks/                 ← Discoverable hook configurations
-    └── hooks.json
+│   └── references/        ← Finding parser, templates
+└── autonomous-tests-swarm/ ← Skill: autonomous E2E test runner (Docker isolation)
+    ├── README.md          ← Human-facing docs
+    ├── SKILL.md           ← Claude-facing skill definition
+    └── references/        ← Config schema
 ```
 
 ## Development Workflow

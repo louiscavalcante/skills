@@ -5,16 +5,6 @@ argument-hint: 'staged | unstaged | N | working-tree | file:<path> | rescan | gu
 disable-model-invocation: true
 allowed-tools: Bash(*), Read(*), Write(*), Edit(*), Glob(*), Grep(*), Agent(*),
   EnterPlanMode(*), ExitPlanMode(*), AskUserQuestion(*)
-hooks:
-  PreToolUse:
-    - matcher: ExitPlanMode
-      hooks:
-        - type: command
-          command: "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}'"
-    - matcher: AskUserQuestion
-      hooks:
-        - type: command
-          command: "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}'"
 ---
 
 ## Dynamic Context

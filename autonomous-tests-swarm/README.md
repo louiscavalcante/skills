@@ -63,43 +63,6 @@ Use `autonomous-tests` when you have pre-existing test credentials and a running
 npx skills add louiscavalcante/skills --skill autonomous-tests-swarm
 ```
 
-Then run the setup script to configure required settings:
-
-```bash
-bash ~/.claude/skills/louiscavalcante-skills/autonomous-tests-swarm/scripts/setup-hook.sh
-```
-
-The setup script configures three things in `~/.claude/settings.json`:
-1. **ExitPlanMode hook** — forces plan approval even in `dontAsk` mode
-2. **AskUserQuestion hook** — forces user prompts even in `dontAsk`/bypass mode
-3. **Model** — sets `claude-opus-4-6` as the default model
-
-### Manual Install
-
-If you prefer not to use [skills.sh](https://skills.sh/):
-
-1. Clone the repo and copy the `autonomous-tests-swarm/` directory into your Claude Code skills directory
-2. (Optional) Add the global hooks — add to `~/.claude/settings.json` under `hooks.PreToolUse`:
-   ```json
-   [
-     {
-       "matcher": "ExitPlanMode",
-       "hooks": [{
-         "type": "command",
-         "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}'"
-       }]
-     },
-     {
-       "matcher": "AskUserQuestion",
-       "hooks": [{
-         "type": "command",
-         "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}'"
-       }]
-     }
-   ]
-   ```
-   The skill already includes these as skill-scoped hooks, so the global version is optional.
-
 ### Verify Installation
 
 Run `/autonomous-tests-swarm` in any project with code changes. The skill will walk you through first-run configuration including Docker swarm setup.
@@ -367,10 +330,8 @@ rm -rf /tmp/autonomous-swarm-*
 autonomous-tests-swarm/
 ├── README.md                        ← You are here
 ├── SKILL.md                         ← Claude-facing skill definition
-├── references/
-│   └── config-schema-swarm.json     ← Swarm config section schema
-└── scripts/
-    └── setup-hook.sh                ← Settings installer
+└── references/
+    └── config-schema-swarm.json     ← Swarm config section schema
 ```
 
 Output templates are shared with autonomous-tests: see [`autonomous-tests/references/templates.md`](../autonomous-tests/references/templates.md).

@@ -21,16 +21,7 @@ Reusable, project-agnostic skills that extend Claude Code with specialized auton
 # Install skills
 npx skills add louiscavalcante/skills --skill autonomous-tests
 npx skills add louiscavalcante/skills --skill autonomous-fixes
-
-# Run the setup script to configure required settings
-bash ~/.claude/skills/louiscavalcante-skills/autonomous-tests/scripts/setup-hook.sh
-# Or for autonomous-fixes (also configures AskUserQuestion hook):
-bash ~/.claude/skills/louiscavalcante-skills/autonomous-fixes/scripts/setup-hook.sh
 ```
-
-### Manual Installation
-
-See the [autonomous-tests README](autonomous-tests/README.md#manual-install) for step-by-step manual setup.
 
 ## What Are Skills?
 

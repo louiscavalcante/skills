@@ -55,43 +55,6 @@ Reads findings from `autonomous-tests` output (bugs, failed tests, security vuln
 npx skills add louiscavalcante/skills --skill autonomous-fixes
 ```
 
-Then run the setup script to configure required settings:
-
-```bash
-bash ~/.claude/skills/louiscavalcante-skills/autonomous-fixes/scripts/setup-hook.sh
-```
-
-The setup script configures three things in `~/.claude/settings.json`:
-1. **ExitPlanMode hook** — forces plan approval even in `dontAsk` mode
-2. **AskUserQuestion hook** — forces user selection prompt even in `dontAsk`/bypass mode
-3. **Model** — sets `claude-opus-4-6` as the default model
-
-### Manual Install
-
-If you prefer not to use [skills.sh](https://skills.sh/):
-
-1. Clone the repo and copy the `autonomous-fixes/` directory into your Claude Code skills directory
-2. (Optional) Add the global hooks — add to `~/.claude/settings.json` under `hooks.PreToolUse`:
-   ```json
-   [
-     {
-       "matcher": "ExitPlanMode",
-       "hooks": [{
-         "type": "command",
-         "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}'"
-       }]
-     },
-     {
-       "matcher": "AskUserQuestion",
-       "hooks": [{
-         "type": "command",
-         "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}'"
-       }]
-     }
-   ]
-   ```
-   The skill already includes these as skill-scoped hooks, so the global version is optional.
-
 ### Verify Installation
 
 Run `/autonomous-fixes` in a project that has `autonomous-tests` findings in `docs/_autonomous/`.
@@ -294,9 +257,7 @@ The loop continues until all findings are resolved or marked as needing manual i
 autonomous-fixes/
 ├── README.md               ← You are here
 ├── SKILL.md                ← Claude-facing skill definition
-├── references/
-│   ├── finding-parser.md   ← Parsing rules for _autonomous/ documents
-│   └── templates.md        ← Output document templates
-└── scripts/
-    └── setup-hook.sh       ← Settings installer
+└── references/
+    ├── finding-parser.md   ← Parsing rules for _autonomous/ documents
+    └── templates.md        ← Output document templates
 ```

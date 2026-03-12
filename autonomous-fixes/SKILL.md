@@ -6,16 +6,6 @@ argument-hint: 'all | critical | high | vulnerability | file:<path>'
 disable-model-invocation: true
 allowed-tools: Bash(*), Read(*), Write(*), Edit(*), Glob(*), Grep(*), Agent(*),
   EnterPlanMode(*), ExitPlanMode(*), AskUserQuestion(*)
-hooks:
-  PreToolUse:
-    - matcher: ExitPlanMode
-      hooks:
-        - type: command
-          command: "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}'"
-    - matcher: AskUserQuestion
-      hooks:
-        - type: command
-          command: "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\"}}'"
 ---
 
 ## Dynamic Context
@@ -69,8 +59,6 @@ Print resolved scope, then proceed without waiting.
 
 ## Phase 0 — Bootstrap
 
-**Step 0 — Prerequisites**: Read `~/.claude/settings.json`. If `PreToolUse` hooks absent from global settings → inform (skill-scoped hooks work automatically), continue.
-
 **Config hash method**: `python3 -c "import json,hashlib;d=json.load(open('.claude/autonomous-tests.json'));[d.pop(k,None) for k in ('_configHash','lastRun','capabilities')];print(hashlib.sha256(json.dumps(d,sort_keys=True).encode()).hexdigest())"`
 
 **Step 1 — Config Validation**: This skill reuses `.claude/autonomous-tests.json`.
@@ -114,7 +102,7 @@ Delegate document parsing to Explore agent. Agent parses all `_autonomous/` docu
 3. **Failed Tests** (T-prefix): Test-results `### Requires Fix`.
 4. **Informational**: Guided (G) and autonomous (A) — counts only, not selectable.
 
-Orchestrator receives findings, applies pre-selection: `all` → V+F+T | `critical` → Severity=Critical | `high` → Critical+High | `vulnerability` → V-prefix | `file:<path>` → specified file only. No argument → present via `AskUserQuestion` (hook-forced).
+Orchestrator receives findings, applies pre-selection: `all` → V+F+T | `critical` → Severity=Critical | `high` → Critical+High | `vulnerability` → V-prefix | `file:<path>` → specified file only. No argument → present via `AskUserQuestion`.
 
 Do NOT read any source code during this phase. Source reading happens in Phase 2.
 
@@ -287,7 +275,6 @@ Phase 4c is the LAST step. There is no Phase 5.
 - Model inheritance — subagents inherit from main conversation, ensure Opus is set
 - **STRICTLY SEQUENTIAL** — one agent at a time, block until shutdown before next
 - Present findings before source reading (Phase 1 before Phase 2)
-- AskUserQuestion hook ensures selection in dontAsk/bypass mode
 - Security fixes address root causes, not symptoms
 - UTC timestamps via `date -u` — never guess
 - Reuse `.claude/autonomous-tests.json` — no separate config
