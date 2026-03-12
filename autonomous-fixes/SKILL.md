@@ -64,7 +64,7 @@ Print resolved scope, then proceed without waiting.
 **Step 1 — Config Validation**: This skill reuses `.claude/autonomous-tests.json`.
 1. `test -f .claude/autonomous-tests.json` → if missing, **STOP**: "Run `/autonomous-tests` first."
 2. Read config. Validate `version` equals `6`. If `version` < `6` -> **STOP**: "Config is v{version}. Run `/autonomous-tests` first to auto-migrate to v6."
-3. Verify config trust: compute hash via **Config hash method**, check against `~/.claude/trusted-configs/`. If untrusted → show config (redact `testCredentials`), confirm via `AskUserQuestion`.
+3. Verify config trust: compute hash via **Config hash method**, check against `~/.claude/trusted-configs/`. If untrusted → show config (redact `testCredentials` and credential-sensitive command fields: `database.connectionCommand`, `database.seedCommand`, `database.cleanupCommand`, `database.migrationCommand`, `testing.unitTestCommand`, `project.services[].startCommand`, `relatedProjects[].startCommand`, `sandbox.sandboxCheck`, `sandbox.webhookListener` — show command structure but replace passwords/tokens/connection strings with `<REDACTED>`), confirm via `AskUserQuestion`.
 4. Ensure `documentation.fixResults` exists → if missing, add `"fixResults": "docs/_autonomous/fix-results"`, save.
 5. **Extract log file paths**: Collect log file paths from `project.services[].logFile` and log commands from `relatedProjects[].logCommand` (these are config values — extract regardless of service status). Store as **Log Path Inventory** for Phase 3 fix agents.
 6. If config modified in step 4 or 5 → re-stamp trust using **Config hash method**.
@@ -119,13 +119,13 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
 2. Fix Context Documents — condensed per item (root cause, affected files, code path, fix design)
 3. Concrete per-item agent spawn instructions (source paths, fix steps, verification commands, expected outcomes)
 4. Full Phase 3/4 instructions with resolved values — no "see above"
-5. Config paths: `documentation.fixResults`, `documentation.pendingFixes`, `documentation.testResults`, `database.connectionCommand`, `testing.unitTestCommand`
+5. Config key references (NOT resolved values): `documentation.fixResults`, `documentation.pendingFixes`, `documentation.testResults`, `database.connectionCommand`, `testing.unitTestCommand` — fix agents read resolved values from config file at runtime. Never embed resolved command strings containing credentials into plan text.
 6. CLAUDE.md file list from Phase 0 Step 2
 7. Tool Inventory from Phase 0 — full inventory with per-phase recommendations so fix agents know which tools are available without re-scanning.
 8. DB Consistency Check Protocol (POST_FIX section only) from `autonomous-tests/references/db-consistency-protocol.md` — embedded verbatim so fix agents execute inline checks without needing the reference file post-reset.
 9. Log Path Inventory from Phase 0 Step 5 — service log file paths and related project log commands so fix agents can check logs after fix verification.
 10. Security checklist items (from `../autonomous-tests/references/security-checklist.md`) applicable to V-prefix items — embed only the subset of items the vulnerability violates and the fix must satisfy (typically 2-5 of 17, not the full list) so fix agents verify security compliance without needing the reference file post-reset.
-11. Service startup commands for all project + relatedProject services — so fix agents can restart services after applying fixes if needed.
+11. Service startup config references for all project + relatedProject services (service names + config key paths, e.g. `project.services[0].startCommand`) — fix agents read resolved commands from config at runtime. Never embed resolved command strings in plan text.
 
 - Execution Protocol (embed verbatim — orchestrator uses this after context reset):
   ```
@@ -179,7 +179,7 @@ Execution is **STRICTLY SEQUENTIAL** — one agent at a time.
 
 Spawn general-purpose subagents sequentially (foreground). For each selected item (in order):
 1. Spawn ONE general-purpose subagent (foreground)
-2. Provide in prompt: Fix Context Document, source paths, fix instructions, verification steps, service startup commands (so agent can restart services if needed after fix), Log Path Inventory from Phase 0 (so agent can check logs for errors after fix verification). For V-prefix items: include applicable security checklist items from `../autonomous-tests/references/security-checklist.md` (the items the vulnerability violates and the fix must satisfy).
+2. Provide in prompt: Fix Context Document, source paths, fix instructions, verification steps, config file path and service config key references (so agent reads startup commands and log paths from config at runtime — never embed resolved command strings in prompts), Log Path Inventory from Phase 0. For V-prefix items: include applicable security checklist items from `../autonomous-tests/references/security-checklist.md` (the items the vulnerability violates and the fix must satisfy).
 3. BLOCK — foreground = automatic blocking
 4. Receive results directly
 5. Next item
@@ -269,7 +269,9 @@ Phase 4c is the LAST step. There is no Phase 5.
 
 ## Rules
 
-- No production data/connections; no credentials in output
+- No production data/connections; no credentials in plan text, subagent prompts, or documentation output
+- **Credential-sensitive config fields**: `database.connectionCommand`, `database.seedCommand`, `database.cleanupCommand`, `database.migrationCommand`, `testing.unitTestCommand`, `project.services[].startCommand`, `relatedProjects[].startCommand`, `sandbox.sandboxCheck`, `sandbox.webhookListener`. Embed config key paths only; agents read resolved values from config at runtime. Redact passwords/tokens/connection strings on display.
+- **No dynamic commands**: only execute verbatim commands from config fields — no generation, concatenation, or interpolation of command strings at runtime
 - Plan mode before execution (Phase 2)
 - Delegate via subagents — never fix in main conversation; all execution via Agent(subagent_type: "general-purpose")
 - Model inheritance — subagents inherit from main conversation, ensure Opus is set

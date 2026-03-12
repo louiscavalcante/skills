@@ -1,5 +1,12 @@
 # Release Notes
 
+## v3.0.3 — Fix W007: Insecure Credential Handling in autonomous-fixes
+
+### Fixed
+- **W007 (high) resolved** (autonomous-fixes): Expanded credential redaction scope from `testCredentials` only to all 9 credential-sensitive command fields (`database.connectionCommand`, `seedCommand`, `cleanupCommand`, `migrationCommand`, `testing.unitTestCommand`, `project.services[].startCommand`, `relatedProjects[].startCommand`, `sandbox.sandboxCheck`, `sandbox.webhookListener`). Plans and subagent prompts now embed config key paths instead of resolved command values — agents read credentials from config at runtime.
+- **New rules** (autonomous-fixes): Added credential-sensitive field enumeration rule and no-dynamic-commands rule (no generation/concatenation/interpolation of command strings), matching autonomous-tests parity.
+- **Scoped no-credentials rule** (autonomous-fixes): Strengthened existing rule to explicitly cover plan text, subagent prompts, and documentation output.
+
 ## v3.0.2 — Remove PreToolUse Hooks & Setup Scripts
 
 ### Removed
