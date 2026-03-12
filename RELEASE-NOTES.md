@@ -1,5 +1,22 @@
 # Release Notes
 
+## v3.1.0 — Task Tracking, Subagent Spawn Templates & Guided Happy-Path Rework
+
+### Added
+- **Phase-level task tracking** (autonomous-tests + swarm): Each execution phase created as a `TaskCreate` entry at start of Phase 4. Tasks chained via dependencies for sequential processing. `TaskUpdate` marks phases `in_progress`/`completed`.
+- **Task Tracking Protocol** section in both SKILL.md files: Defines task naming, lifecycle, and dependency chaining. Guided happy-path scenarios get per-scenario subtasks.
+- **Task Tracking Block** in self-containment mandates: Verbatim block embedded in every plan with all TaskCreate calls. Survives context reset.
+- **Phase Orchestration Protocol** in both execution-protocols reference files: Explicit `Agent()` spawn templates for every phase with full prompt structures, context requirements, and report-back formats.
+- `TaskCreate(*)` and `TaskUpdate(*)` added to `allowed-tools` in both skills.
+
+### Changed
+- **Phase ordering** (both skills): Regression now runs BEFORE guided happy-path (4.5 = Regression, 4.6 = Guided).
+- **Guided happy-path execution model** (both skills): Now runs in the MAIN CONVERSATION instead of being delegated to a subagent. Orchestrator presents steps via AskUserQuestion, spawns subagents to seed DB and verify logs + DB state after each step. Each scenario is a separate task.
+- **Guided Execution Protocol** (both execution-protocols files): Rewritten for main-conversation execution with per-step log monitoring and DB analysis via verification subagents.
+- **Post-Discovery Prompts** (both skills): Reinforced that guided happy-path inclusion is decided BEFORE plan mode.
+- **Phase 4 opening** (both skills): Now references Task Tracking Block and Phase Orchestration Protocol.
+- **Self-containment mandate** (both skills): Added items for task tracking and orchestration protocol embedding.
+
 ## v3.0.3 — Fix W007: Insecure Credential Handling in autonomous-fixes
 
 ### Fixed

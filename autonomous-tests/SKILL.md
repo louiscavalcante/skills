@@ -4,7 +4,7 @@ description: 'Run autonomous tests (integration via curl + E2E via browser). Arg
 argument-hint: 'staged | unstaged | N | working-tree | file:<path> | rescan | guided'
 disable-model-invocation: true
 allowed-tools: Bash(*), Read(*), Write(*), Edit(*), Glob(*), Grep(*), Agent(*),
-  EnterPlanMode(*), ExitPlanMode(*), AskUserQuestion(*)
+  EnterPlanMode(*), ExitPlanMode(*), AskUserQuestion(*), TaskCreate(*), TaskUpdate(*)
 ---
 
 ## Dynamic Context
@@ -51,6 +51,18 @@ The main agent is the Orchestrator. It coordinates phases but NEVER executes ope
 - Make phase-gating decisions (proceed/stop/abort)
 
 **Reporting hierarchy:** Agent -> Orchestrator -> Plan
+
+## Task Tracking Protocol
+
+The orchestrator uses `TaskCreate` and `TaskUpdate` to track phase-level progress. This provides visible progress indicators and a deterministic execution sequence for the post-reset orchestrator.
+
+**When to create tasks**: Immediately after plan approval (start of Phase 4), create ALL phase tasks at once. This gives a complete checklist that survives context pressure.
+
+**Task lifecycle**: `pending` -> `in_progress` (when phase starts) -> `completed` (when phase finishes). If a phase triggers STOP/ABORT, update the task description with the reason before halting.
+
+**Task naming**: `Phase {N}: {Phase Name}` (e.g., `Phase 4.1: Service Restoration`). For guided happy-path, each scenario gets its own subtask: `Phase 4.6.{M}: {Scenario Name}`.
+
+**Dependency chaining**: Each task blocks the next so the orchestrator processes them in order.
 
 ## Arguments: $ARGUMENTS
 
@@ -195,8 +207,9 @@ Check for re-test indicators in `documentation.fixResults` path (default: `docs/
 Compile from Explore report (do NOT re-read files). Contents: features, endpoints, DB collections/tables, cross-project seed map, test flow classifications, security checklist applicability map, data seeding plan, log file paths from Service Readiness Report, related project log commands, external services, edge cases, test history, capabilities. Guided mode adds `Mode` + `Source` at top. Cascaded to every Phase 4 agent.
 
 ### Post-Discovery Prompts (standard mode only — skip if `guided` or regression)
+**MUST execute BEFORE entering plan mode** — guided happy-path inclusion must be decided before the plan is written.
 Single `AskUserQuestion`:
-- **Guided Happy-Path** — After all autonomous tests, generate guided test plan where user performs actions while agent verifies. Happy-path only. Include? (yes/no)
+- **Guided Happy-Path** — After all autonomous tests and regression, generate guided test plan where user performs actions while agent verifies logs and DB per step. Happy-path only. Include? (yes/no)
 
 Parse response into `guidedHappyPathApproved` boolean.
 
@@ -235,6 +248,22 @@ Parse response into `guidedHappyPathApproved` boolean.
 16. Chrome DevTools protocol (if available) from `references/chrome-devtools-protocol.md`
 17. Service startup commands for all project + relatedProject services
 18. Execution protocols from `references/execution-protocols.md` — embed relevant protocols verbatim
+19. Task Tracking Block — create all phase tasks at execution start (embed verbatim):
+    ```
+    IMMEDIATELY after plan approval and context reload, create tasks:
+      TaskCreate("Phase 4.1: Service Restoration", "Re-establish services and log captures post-reset")
+      TaskCreate("Phase 4.2: Setup", "Read source files, compile Feature Context Documents")
+      TaskCreate("Phase 4.3: Integration Suites", "Execute integration test suites sequentially via subagents")
+      TaskCreate("Phase 4.4: E2E Suites", "Execute E2E browser-based test suites via subagents") — skip if frontendType == api-only
+      TaskCreate("Phase 4.5: Regression", "Run unit tests via testing.unitTestCommand")
+      TaskCreate("Phase 4.6: Guided Happy-Path", "User-augmented verification per scenario") — skip if not approved
+        For each happy-path scenario [M]: TaskCreate("Phase 4.6.[M]: [Scenario Name]", "[scenario description]")
+      TaskCreate("Phase 5: Results & Docs", "Fix cycles, documentation generation, cleanup")
+    Chain: 4.1 -> 4.2 -> 4.3 -> 4.4 -> 4.5 -> 4.6 -> 5 (sequential via addBlockedBy)
+    Before each phase: TaskUpdate(id, status: "in_progress")
+    After each phase: TaskUpdate(id, status: "completed")
+    ```
+20. Phase Orchestration Protocol from `references/execution-protocols.md` — embed verbatim. Contains concrete Agent() spawn templates for every phase.
 
 ### Test Plan Structure
 
@@ -266,11 +295,15 @@ Single testing.unitTestCommand execution after all suites complete.
 - Suite 2 "Impact Zone" (conditional): tests for 1-hop callers/callees
 - No other suites. Execution protocol unchanged (sequential subagent flow).
 
-**Pre-approval validation**: Before presenting the plan, verify all self-containment items (1-18) are present. Missing items -> add before prompting.
+**Pre-approval validation**: Before presenting the plan, verify all self-containment items (1-20) are present. Missing items -> add before prompting.
 
 **Wait for user approval.**
 
 ## Phase 4 — Execution (Subagents)
+
+**First**: Create all phase tasks per the Task Tracking Block embedded in the plan. Chain dependencies.
+
+**Then**: Follow the Phase Orchestration Protocol embedded in the plan for concrete Agent() spawn templates. Each phase: TaskUpdate -> spawn subagent with detailed context -> receive report -> TaskUpdate completed.
 
 Spawn `general-purpose` subagents sequentially (foreground). Each receives full context and returns results directly.
 
@@ -308,12 +341,29 @@ Browser tool priority (skipping without attempting is PROHIBITED):
 
 Reports back: PASS/FAIL per step, screenshots, network/console findings, backend verification, logs.
 
-### 5. Guided Happy-Path (fg, optional, if user approved)
-Runs LAST — after autonomous suites. No browser automation. Category 1 only.
-For each test: seed DB -> present steps via `AskUserQuestion` (MANDATORY — text output PROHIBITED) with options `["Done - ready to verify", "Skip this test", "Issue encountered"]` -> user acts -> verify via DB/API/logs -> PASS/FAIL.
-
-### 6. Regression Agent (fg, LAST)
+### 5. Regression Agent (fg, after autonomous suites)
 Run `testing.unitTestCommand` once. Report total/passed/failed/skipped. Never interleaved with other suites.
+
+### 6. Guided Happy-Path (MAIN CONVERSATION, optional, if user approved — LAST)
+Runs LAST — after all autonomous suites and regression. No browser automation. Category 1 only.
+Each happy-path scenario is a separate task (`Phase 4.6.{M}`).
+
+**Per-scenario flow** (orchestrator drives — NOT delegated to a single subagent):
+1. TaskUpdate(scenario task, status: "in_progress")
+2. **Seed**: Spawn subagent (fg) to seed DB and set up prerequisites for this scenario
+3. **Per-step loop** (for each step in the scenario):
+   a. Orchestrator presents step via `AskUserQuestion` (MANDATORY — text output PROHIBITED):
+      Options: `["Done - ready to verify", "Skip this test", "Issue encountered"]`
+   b. If "Done": spawn verification subagent (fg) that:
+      - Checks service logs since step start (grep ERROR/WARN --since timestamp)
+      - Runs DB queries to verify expected state changes from this step
+      - Runs API verification calls if applicable
+      - Reports: PASS/FAIL with log findings + DB state analysis
+   c. If verification FAIL: record finding, continue to next step (do not halt scenario)
+   d. If "Skip": record SKIPPED, continue
+   e. If "Issue encountered": record user's description, continue
+4. After all steps: TaskUpdate(scenario task, status: "completed")
+5. Next scenario
 
 ### Critical Execution Rules
 - Never create batch scripts — each test explicitly passed to subagent
@@ -325,7 +375,7 @@ Run `testing.unitTestCommand` once. Report total/passed/failed/skipped. Never in
 - **Finding verification** (mandatory): identify source code -> read to confirm -> distinguish real vs agent-created -> report only confirmed. Unconfirmed -> `Severity: Unverified` in `### Unverified`
 - **Anomaly detection**: duplicate records, unexpected DB changes, warning/error logs, slow queries, orphaned references, auth anomalies, unexpected response fields/status codes
 - **External CLI guard**: Before any CLI command from `externalServices[]`, verify the subcommand is in `allowedOperations` and no `prohibitedFlags` are present. Reject non-matching commands.
-- Prohibited: multiple concurrent subagents, parallel execution, main-conversation execution
+- Prohibited: multiple concurrent subagents, parallel execution. Exception: guided happy-path runs in main conversation (orchestrator presents steps, subagents seed and verify)
 
 ## Phase 5 — Results & Docs
 
@@ -373,10 +423,13 @@ Run `testing.unitTestCommand` once. Report total/passed/failed/skipped. Never in
 | Guided = happy-path only | Category 1 only in guided mode — categories 2-8 autonomous-only |
 | Tool loading gate | Browser tools need pre-plan approval in autonomous mode, never in guided |
 | Plan self-containment | All context embedded in plan for post-reset survival — no "see above" references |
-| Guided happy-path = post-all | Guided happy-path runs last — after all autonomous suites |
+| Guided happy-path = post-all | Guided happy-path runs last — after all autonomous suites AND regression |
 | Post-discovery prompts | Standard mode only — skipped when `guided` arg or regression mode active |
 | Documentation in every run | Test-results doc generated for every run. Embedded in plan execution protocol |
 | DB consistency inline | POST_SEED, POST_TEST, POST_CLEANUP checks within Phase 4 per suite |
+| Task tracking per phase | TaskCreate for all execution phases at plan start. TaskUpdate in_progress/completed around each. Phase Orchestration Protocol embedded in plan |
+| Guided = main conversation | Orchestrator presents steps via AskUserQuestion. Subagents seed DB and verify logs/DB per step. NOT delegated to a single subagent |
+| Guided = per-scenario tasks | Each happy-path scenario gets its own task (Phase 4.6.{M}) |
 
 ## Operational Bounds
 
