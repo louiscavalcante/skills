@@ -1,5 +1,16 @@
 # Release Notes
 
+## v3.1.1 — Fix W007: Insecure Credential Handling for Log Commands
+
+### Fixed
+- **W007 regression in autonomous-fixes**: `relatedProjects[].logCommand` was not treated as a credential-sensitive field — resolved log commands were extracted in Phase 0 Step 5, embedded in Phase 2 plan text, and passed to Phase 3 agent prompts
+- **Phase 0 Step 1.3**: Added `relatedProjects[].logCommand` to redaction list; changed from partial redaction ("show command structure") to full redaction of entire command value
+- **Phase 0 Step 5**: Now stores only config key references (e.g., `relatedProjects[0].logCommand`) instead of resolved command strings
+- **Phase 2 Step 9**: Clarified that only log file paths are embedded; log commands use config key references for runtime resolution
+- **Phase 2 execution protocol**: Updated LOG CONTEXT to specify agents receive config key references and read resolved commands from config at runtime
+- **Phase 3**: Clarified Log Path Inventory contains file paths only; log command references resolved at runtime
+- **Rules credential-sensitive fields**: Added `relatedProjects[].logCommand` to the list
+
 ## v3.1.0 — Task Tracking, Subagent Spawn Templates & Guided Happy-Path Rework
 
 ### Added

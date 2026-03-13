@@ -64,9 +64,9 @@ Print resolved scope, then proceed without waiting.
 **Step 1 — Config Validation**: This skill reuses `.claude/autonomous-tests.json`.
 1. `test -f .claude/autonomous-tests.json` → if missing, **STOP**: "Run `/autonomous-tests` first."
 2. Read config. Validate `version` equals `6`. If `version` < `6` -> **STOP**: "Config is v{version}. Run `/autonomous-tests` first to auto-migrate to v6."
-3. Verify config trust: compute hash via **Config hash method**, check against `~/.claude/trusted-configs/`. If untrusted → show config (redact `testCredentials` and credential-sensitive command fields: `database.connectionCommand`, `database.seedCommand`, `database.cleanupCommand`, `database.migrationCommand`, `testing.unitTestCommand`, `project.services[].startCommand`, `relatedProjects[].startCommand`, `sandbox.sandboxCheck`, `sandbox.webhookListener` — show command structure but replace passwords/tokens/connection strings with `<REDACTED>`), confirm via `AskUserQuestion`.
+3. Verify config trust: compute hash via **Config hash method**, check against `~/.claude/trusted-configs/`. If untrusted → show config (redact `testCredentials` and credential-sensitive command fields: `database.connectionCommand`, `database.seedCommand`, `database.cleanupCommand`, `database.migrationCommand`, `testing.unitTestCommand`, `project.services[].startCommand`, `relatedProjects[].startCommand`, `relatedProjects[].logCommand`, `sandbox.sandboxCheck`, `sandbox.webhookListener` — show only the config key name, replace entire command value with `<REDACTED>`), confirm via `AskUserQuestion`.
 4. Ensure `documentation.fixResults` exists → if missing, add `"fixResults": "docs/_autonomous/fix-results"`, save.
-5. **Extract log file paths**: Collect log file paths from `project.services[].logFile` and log commands from `relatedProjects[].logCommand` (these are config values — extract regardless of service status). Store as **Log Path Inventory** for Phase 3 fix agents.
+5. **Extract log file paths**: Collect log file paths from `project.services[].logFile` (these are plain file paths — safe to embed). For `relatedProjects[].logCommand`, store only config key references (e.g., `relatedProjects[0].logCommand`) — never extract resolved command strings. Store as **Log Path Inventory** for Phase 3 fix agents.
 6. If config modified in step 4 or 5 → re-stamp trust using **Config hash method**.
 
 **Step 2 — CLAUDE.md Deep Scan**: Delegate to Explore agent. Scan CLAUDE.md files up to 3 levels deep, plus `~/.claude/CLAUDE.md` and `.claude/CLAUDE.md`. Return discovered file list. Cache for Phase 2.
@@ -123,7 +123,7 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
 6. CLAUDE.md file list from Phase 0 Step 2
 7. Tool Inventory from Phase 0 — full inventory with per-phase recommendations so fix agents know which tools are available without re-scanning.
 8. DB Consistency Check Protocol (POST_FIX section only) from `autonomous-tests/references/db-consistency-protocol.md` — embedded verbatim so fix agents execute inline checks without needing the reference file post-reset.
-9. Log Path Inventory from Phase 0 Step 5 — service log file paths and related project log commands so fix agents can check logs after fix verification.
+9. Log Path Inventory from Phase 0 Step 5 — service log file paths (resolved, safe to embed) and related project log command config key references (e.g., `relatedProjects[0].logCommand`) — fix agents read resolved log commands from config at runtime. Never embed resolved log command strings in plan text.
 10. Security checklist items (from `../autonomous-tests/references/security-checklist.md`) applicable to V-prefix items — embed only the subset of items the vulnerability violates and the fix must satisfy (typically 2-5 of 17, not the full list) so fix agents verify security compliance without needing the reference file post-reset.
 11. Service startup config references for all project + relatedProject services (service names + config key paths, e.g. `project.services[0].startCommand`) — fix agents read resolved commands from config at runtime. Never embed resolved command strings in plan text.
 
@@ -131,7 +131,7 @@ Do NOT read any source code during this phase. Source reading happens in Phase 2
   ```
   SETUP: Spawn general-purpose subagent (foreground). Reads source files referenced by findings, compiles Fix Context Documents, reads CLAUDE.md files, returns results.
   TOOL CONTEXT: Fix agents receive relevant Tool Inventory subset (service MCPs, CLI tools, DB tools, testing tools) in their prompts.
-  LOG CONTEXT: Fix agents receive Log Path Inventory (service log files, related project log commands) and service startup commands.
+  LOG CONTEXT: Fix agents receive Log Path Inventory (service log file paths only) and config key references for log commands and service startup commands — agents read resolved commands from config at runtime.
   SECURITY CONTEXT: V-prefix fix agents receive applicable security checklist items (from 17-item checklist) embedded in their Fix Context Document.
   DB CONSISTENCY: Fix agents that modify DB-interacting code capture pre-fix record counts, then run POST_FIX check after fix application. Non-DB fixes skip this step.
   FLOW: STRICTLY SEQUENTIAL — one subagent at a time:
@@ -179,7 +179,7 @@ Execution is **STRICTLY SEQUENTIAL** — one agent at a time.
 
 Spawn general-purpose subagents sequentially (foreground). For each selected item (in order):
 1. Spawn ONE general-purpose subagent (foreground)
-2. Provide in prompt: Fix Context Document, source paths, fix instructions, verification steps, config file path and service config key references (so agent reads startup commands and log paths from config at runtime — never embed resolved command strings in prompts), Log Path Inventory from Phase 0. For V-prefix items: include applicable security checklist items from `../autonomous-tests/references/security-checklist.md` (the items the vulnerability violates and the fix must satisfy).
+2. Provide in prompt: Fix Context Document, source paths, fix instructions, verification steps, config file path and service config key references (so agent reads startup commands and log commands from config at runtime — never embed resolved command strings in prompts), Log Path Inventory from Phase 0 (log file paths only; log command config key references for runtime resolution). For V-prefix items: include applicable security checklist items from `../autonomous-tests/references/security-checklist.md` (the items the vulnerability violates and the fix must satisfy).
 3. BLOCK — foreground = automatic blocking
 4. Receive results directly
 5. Next item
@@ -270,7 +270,7 @@ Phase 4c is the LAST step. There is no Phase 5.
 ## Rules
 
 - No production data/connections; no credentials in plan text, subagent prompts, or documentation output
-- **Credential-sensitive config fields**: `database.connectionCommand`, `database.seedCommand`, `database.cleanupCommand`, `database.migrationCommand`, `testing.unitTestCommand`, `project.services[].startCommand`, `relatedProjects[].startCommand`, `sandbox.sandboxCheck`, `sandbox.webhookListener`. Embed config key paths only; agents read resolved values from config at runtime. Redact passwords/tokens/connection strings on display.
+- **Credential-sensitive config fields**: `database.connectionCommand`, `database.seedCommand`, `database.cleanupCommand`, `database.migrationCommand`, `testing.unitTestCommand`, `project.services[].startCommand`, `relatedProjects[].startCommand`, `relatedProjects[].logCommand`, `sandbox.sandboxCheck`, `sandbox.webhookListener`. Embed config key paths only; agents read resolved values from config at runtime. Redact passwords/tokens/connection strings on display.
 - **No dynamic commands**: only execute verbatim commands from config fields — no generation, concatenation, or interpolation of command strings at runtime
 - Plan mode before execution (Phase 2)
 - Delegate via subagents — never fix in main conversation; all execution via Agent(subagent_type: "general-purpose")
